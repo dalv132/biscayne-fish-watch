@@ -3,15 +3,22 @@
  *
  * Data sources:
  *   1. OpenWeatherMap "Current Weather" API — wind speed & rain
- *   2. NOAA CO-OPS Tides API — Station 8723214 (Virginia Key)
+ *   2. NOAA CO-OPS Tides API — Station 8723165 (Miamarina)
  *
  * Condition logic:
  *   OPTIMAL  →  ALL 3 conditions met
  *   FAIR     →  EXACTLY 2 of 3 conditions met
  *   POOR     →  fewer than 2 conditions met
  *
- * Tide window:
- *   "Good" if current time is within ±2 hours of the nearest HIGH tide event.
+ * Tide window (asymmetric — Venetian Causeway):
+ *   "Good" if within 2 hours BEFORE high tide OR up to 1 hour AFTER
+ *   (incoming ocean water brings clarity; outgoing clears quickly).
+ *
+ * Visibility Score:
+ *   < 5 mph → Excellent | 5–10 mph → Good | > 10 mph → Low
+ *
+ * Rain window:
+ *   Condition fails if any rain detected in the past 2 hours (1h + 3h OWM fields).
  */
 
 /* ── Constants ─────────────────────────────────── */
@@ -19,11 +26,16 @@ const OPENWEATHER_API_KEY = '0494e55eedb7fc261cf895d4c4118b25';
 
 const LAT = 25.788996;
 const LON = -80.172930;
-const NOAA_STATION = '8723214'; // Virginia Key
+const NOAA_STATION = '8723165'; // Miamarina — Venetian Causeway
 
-const WIND_THRESHOLD_MPH = 12;   // below = OK
-const TIDE_WINDOW_HOURS = 2;    // ±2 h around high tide = OK
+const WIND_THRESHOLD_MPH = 10;   // < 10 mph = OK (choppy near causeway)
+const TIDE_BEFORE_HOURS = 2;    // up to 2 h BEFORE high tide = OK
+const TIDE_AFTER_HOURS = 1;    // up to 1 h AFTER  high tide = OK
 const MS_PER_HOUR = 3600000;
+
+// Visibility score thresholds
+const VIS_EXCELLENT_MPH = 5;
+const VIS_GOOD_MPH = 10;
 
 /* ── Helpers ───────────────────────────────────── */
 
@@ -58,6 +70,7 @@ const condBadge = document.getElementById('condition-badge');
 const condText = document.getElementById('condition-text');
 const condSub = document.getElementById('condition-subtitle');
 const lastUpdated = document.getElementById('last-updated');
+const visibilityEl = document.getElementById('visibility-score');
 
 const windValue = document.getElementById('wind-value');
 const windDetail = document.getElementById('wind-detail');
@@ -135,8 +148,8 @@ async function fetchTides() {
   if (!res.ok) throw new Error(`NOAA: ${res.status} ${res.statusText}`);
   const data = await res.json();
 
-  // 🔍 Debug: raw NOAA tide response
-  console.log('[BiscayneFishWatch] NOAA Tides raw data:', data);
+  // 🔍 Debug: raw NOAA Tides response (Station 8723165 — Miamarina)
+  console.log('[BiscayneFishWatch] NOAA Tides raw data (Station 8723165):', data);
 
   if (data.error) throw new Error(`NOAA error: ${data.error.message}`);
   return data;
@@ -144,26 +157,33 @@ async function fetchTides() {
 
 /* ── Tide window logic ─────────────────────────── */
 /**
- * Given an array of NOAA tide predictions, find the nearest HIGH tide
- * and determine whether the current time is within ±TIDE_WINDOW_HOURS of it.
+ * Asymmetric tide window for the Venetian Causeway / Miamarina area.
  *
  * NOAA returns predictions in this shape:
- *   { t: "2025-03-02 06:42", v: "1.245", type: "H" }
+ *   { t: "2026-03-03 06:42", v: "1.245", type: "H" }
  *
- * We parse the "t" string as a local date, compute the delta in milliseconds
- * between now and that high-tide moment, then check if |delta| ≤ window.
+ * Signed delta:  deltaMs = now − highTideTime
+ *   negative → tide is upcoming (incoming / flooding)
+ *   positive → tide has passed  (outgoing / ebbing)
+ *
+ * Window rule:
+ *   OK if  -(TIDE_BEFORE_HOURS * MS_PER_HOUR) ≤ deltaMs ≤ (TIDE_AFTER_HOURS * MS_PER_HOUR)
+ *   i.e.  up to 2 h BEFORE high tide  OR  up to 1 h AFTER high tide.
+ *
+ * Rationale: incoming ocean water pushes clear water through the causeway
+ * for ~2 h before peak; clarity drops quickly once the tide turns outward.
  *
  * @param {Array} predictions  - NOAA hilo predictions array
- * @returns {{ inWindow: boolean, nearestHigh: Date|null, deltaMinutes: number, allHighs: Date[] }}
+ * @returns {{ inWindow: boolean, nearestHigh: object|null, deltaMinutes: number, allHighs: Array }}
  */
 function evaluateTideWindow(predictions) {
   const now = Date.now();
 
-  // Filter to HIGH tide events and parse their times
+  // Filter to HIGH tide events and parse their timestamps
   const highs = predictions
     .filter(p => p.type === 'H')
     .map(p => ({
-      date: new Date(p.t),   // "YYYY-MM-DD HH:MM" parsed as local time
+      date: new Date(p.t),  // "YYYY-MM-DD HH:MM" parsed as local time
       height: parseFloat(p.v)
     }));
 
@@ -171,21 +191,23 @@ function evaluateTideWindow(predictions) {
     return { inWindow: false, nearestHigh: null, deltaMinutes: Infinity, allHighs: [] };
   }
 
-  // Find the high tide whose time is closest to now
+  // Find the high tide whose absolute time-distance from now is smallest
   let nearest = highs[0];
   let minDelta = Math.abs(now - nearest.date.getTime());
 
   for (let i = 1; i < highs.length; i++) {
     const d = Math.abs(now - highs[i].date.getTime());
-    if (d < minDelta) {
-      minDelta = d;
-      nearest = highs[i];
-    }
+    if (d < minDelta) { minDelta = d; nearest = highs[i]; }
   }
 
-  const deltaMs = now - nearest.date.getTime();  // positive = past high tide
+  // Signed delta: negative = tide upcoming, positive = tide passed
+  const deltaMs = now - nearest.date.getTime();
   const deltaMinutes = Math.round(deltaMs / 60000);
-  const inWindow = Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
+
+  // Asymmetric check: must be within [−2h, +1h] of high tide
+  const inWindow =
+    deltaMs >= -(TIDE_BEFORE_HOURS * MS_PER_HOUR) &&
+    deltaMs <= (TIDE_AFTER_HOURS * MS_PER_HOUR);
 
   return { inWindow, nearestHigh: nearest, deltaMinutes, allHighs: highs, allPredictions: predictions };
 }
@@ -206,7 +228,10 @@ function renderTideTimeline(predictions, nearestHigh) {
     const isHigh = p.type === 'H';
     const isNearest = nearestHigh && Math.abs(eventDate - nearestHigh.date) < 60000;
     const deltaMs = nowMs - eventDate.getTime();
-    const inWin = isHigh && Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
+    // Asymmetric window check mirroring evaluateTideWindow
+    const inWin = isHigh &&
+      deltaMs >= -(TIDE_BEFORE_HOURS * MS_PER_HOUR) &&
+      deltaMs <= (TIDE_AFTER_HOURS * MS_PER_HOUR);
 
     const el = document.createElement('div');
     el.className = 'tide-event' + (isNearest ? ' highlight' : '') + (inWin ? ' in-window' : '');
@@ -230,7 +255,7 @@ function renderTideTimeline(predictions, nearestHigh) {
     if (inWin) {
       const tag = document.createElement('div');
       tag.className = 'tide-window-tag';
-      tag.textContent = '±2h Window';
+      tag.textContent = '-2h/+1h Window';
       el.appendChild(tag);
     }
 
@@ -245,7 +270,7 @@ async function init() {
     const [weatherData, tideData] = await Promise.all([fetchWeather(), fetchTides()]);
 
     /* ─── Weather: wind ─── */
-    const windSpeedMph = weatherData.wind?.speed ?? 0;   // OWM imperial already returns mph
+    const windSpeedMph = weatherData.wind?.speed ?? 0;  // OWM imperial returns mph
     const windDir = weatherData.wind?.deg ?? null;
     const windGust = weatherData.wind?.gust ?? null;
 
@@ -257,16 +282,32 @@ async function init() {
       : 'Direction unavailable';
     applyStatus(windCard, windDot, windOk ? 'good' : 'poor');
 
-    /* ─── Weather: rain ─── */
-    // OWM "rain" object: { "1h": mm_in_last_hour, "3h": ... }
-    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
-    const rainOk = rainMm1h === 0;
+    /* ─── Visibility Score (wind-based) ─── */
+    let visLabel, visClass;
+    if (windSpeedMph < VIS_EXCELLENT_MPH) {
+      visLabel = '👁 Visibility: Excellent'; visClass = 'vis-excellent';
+    } else if (windSpeedMph <= VIS_GOOD_MPH) {
+      visLabel = '👁 Visibility: Good'; visClass = 'vis-good';
+    } else {
+      visLabel = '👁 Visibility: Low'; visClass = 'vis-low';
+    }
+    visibilityEl.textContent = visLabel;
+    visibilityEl.className = `visibility-score ${visClass}`;
 
-    rainValue.textContent = rainMm1h > 0 ? `${rainMm1h.toFixed(1)} mm` : 'None';
+    /* ─── Weather: rain (2-hour window) ─── */
+    // OWM provides "1h" (last hour) and "3h" (last 3 hours) rain in mm.
+    // Fail if ANY rain in either field (covers the 2-hour requirement).
+    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
+    const rainMm3h = weatherData.rain?.['3h'] ?? 0;
+    const rainIn2h = rainMm1h > 0 || rainMm3h > 0;
+    const rainOk = !rainIn2h;
+    const displayRain = rainMm1h > 0 ? rainMm1h : rainMm3h;
+
+    rainValue.textContent = rainIn2h ? `${displayRain.toFixed(1)} mm` : 'None';
     rainDetail.textContent = rainOk
-      ? 'No precipitation in the last hour'
-      : `${rainMm1h.toFixed(1)} mm in past hour`;
-    applyStatus(rainCard, rainDot, rainOk ? 'good' : rainMm1h < 2 ? 'fair' : 'poor');
+      ? 'No precipitation in the last 2 hours'
+      : `Rain detected — ${displayRain.toFixed(1)} mm (last 1–3 hrs)`;
+    applyStatus(rainCard, rainDot, rainOk ? 'good' : displayRain < 1 ? 'fair' : 'poor');
 
     /* ─── Tides ─── */
     const predictions = tideData.predictions ?? [];
@@ -280,7 +321,7 @@ async function init() {
     } else {
       const absDelta = Math.abs(deltaMinutes);
       const direction = deltaMinutes > 0 ? 'after' : 'before';
-      tideValText = inWindow ? `±${TIDE_WINDOW_HOURS}h ✓` : `Outside window`;
+      tideValText = inWindow ? `-2h/+1h ✓` : `Outside window`;
       tideDetText = absDelta < 1
         ? `High tide is now (${fmtTime(nearestHigh.date)})`
         : `${fmtDuration(absDelta)} ${direction} high at ${fmtTime(nearestHigh.date)}`;
