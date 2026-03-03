@@ -264,7 +264,14 @@ main {
   gap: 1rem;
 }
 
-@media (max-width: 640px) {
+/* Mid-width: 2 columns (5 cards → row of 2 + row of 3 naturally centred) */
+@media (max-width: 720px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
   .metrics-grid {
     grid-template-columns: 1fr;
   }

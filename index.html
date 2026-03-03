@@ -109,6 +109,40 @@
                 </div>
                 <div class="metric-status-dot" id="rain-status-dot"></div>
             </article>
+
+            <!-- Season Card -->
+            <article class="metric-card" id="season-card">
+                <div class="metric-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" />
+                        <path
+                            d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    </svg>
+                </div>
+                <div class="metric-body">
+                    <h2 class="metric-label">Season</h2>
+                    <div class="metric-value" id="season-value">—</div>
+                    <div class="metric-detail" id="season-detail">fetching…</div>
+                </div>
+                <div class="metric-status-dot" id="season-status-dot"></div>
+            </article>
+
+            <!-- Water Temperature Card -->
+            <article class="metric-card" id="temp-card">
+                <div class="metric-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </div>
+                <div class="metric-body">
+                    <h2 class="metric-label">Water Temp</h2>
+                    <div class="metric-value" id="temp-value">—</div>
+                    <div class="metric-detail" id="temp-detail">fetching…</div>
+                </div>
+                <div class="metric-status-dot" id="temp-status-dot"></div>
+            </article>
         </section>
 
         <!-- Tide Timeline -->
