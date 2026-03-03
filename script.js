@@ -1,8 +1,6 @@
 /**
  * Biscayne Bay Fish Watch — script.js
  *
- * Depends on: config.js  (must be loaded first, exposes window.API_KEYS)
- *
  * Data sources:
  *   1. OpenWeatherMap "Current Weather" API — wind speed & rain
  *   2. NOAA CO-OPS Tides API — Station 8723214 (Virginia Key)
@@ -17,13 +15,15 @@
  */
 
 /* ── Constants ─────────────────────────────────── */
-const LAT  = 25.788996;
-const LON  = -80.172930;
+const OPENWEATHER_API_KEY = '0494e55eedb7fc261cf895d4c4118b25';
+
+const LAT = 25.788996;
+const LON = -80.172930;
 const NOAA_STATION = '8723214'; // Virginia Key
 
 const WIND_THRESHOLD_MPH = 12;   // below = OK
-const TIDE_WINDOW_HOURS  = 2;    // ±2 h around high tide = OK
-const MS_PER_HOUR        = 3600000;
+const TIDE_WINDOW_HOURS = 2;    // ±2 h around high tide = OK
+const MS_PER_HOUR = 3600000;
 
 /* ── Helpers ───────────────────────────────────── */
 
@@ -54,25 +54,25 @@ function todayNoaaDate() {
 }
 
 /* ── DOM refs ──────────────────────────────────── */
-const condBadge    = document.getElementById('condition-badge');
-const condText     = document.getElementById('condition-text');
-const condSub      = document.getElementById('condition-subtitle');
-const lastUpdated  = document.getElementById('last-updated');
+const condBadge = document.getElementById('condition-badge');
+const condText = document.getElementById('condition-text');
+const condSub = document.getElementById('condition-subtitle');
+const lastUpdated = document.getElementById('last-updated');
 
-const windValue    = document.getElementById('wind-value');
-const windDetail   = document.getElementById('wind-detail');
-const windDot      = document.getElementById('wind-status-dot');
-const windCard     = document.getElementById('wind-card');
+const windValue = document.getElementById('wind-value');
+const windDetail = document.getElementById('wind-detail');
+const windDot = document.getElementById('wind-status-dot');
+const windCard = document.getElementById('wind-card');
 
-const tideValue    = document.getElementById('tide-value');
-const tideDetail   = document.getElementById('tide-detail');
-const tideDot      = document.getElementById('tide-status-dot');
-const tideCard     = document.getElementById('tide-card');
+const tideValue = document.getElementById('tide-value');
+const tideDetail = document.getElementById('tide-detail');
+const tideDot = document.getElementById('tide-status-dot');
+const tideCard = document.getElementById('tide-card');
 
-const rainValue    = document.getElementById('rain-value');
-const rainDetail   = document.getElementById('rain-detail');
-const rainDot      = document.getElementById('rain-status-dot');
-const rainCard     = document.getElementById('rain-card');
+const rainValue = document.getElementById('rain-value');
+const rainDetail = document.getElementById('rain-detail');
+const rainDot = document.getElementById('rain-status-dot');
+const rainCard = document.getElementById('rain-card');
 
 const tideTimeline = document.getElementById('tide-timeline');
 
@@ -96,15 +96,15 @@ function renderCondition(rating, metricsText) {
   condBadge.classList.remove('loading', 'optimal', 'fair', 'poor');
   condBadge.classList.add(rating.toLowerCase());
   condText.textContent = rating;
-  condSub.textContent  = metricsText;
+  condSub.textContent = metricsText;
   lastUpdated.textContent = `Last updated: ${fmtTime(new Date())}`;
 }
 
 /* ── Fetch: OpenWeatherMap ─────────────────────── */
 async function fetchWeather() {
-  const key = API_KEYS.OPENWEATHER;
-  const url  = `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&appid=${key}&units=imperial`;
-  const res  = await fetch(url);
+  const key = OPENWEATHER_API_KEY;
+  const url = `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&appid=${key}&units=imperial`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`OpenWeatherMap: ${res.status} ${res.statusText}`);
   const data = await res.json();
 
@@ -117,7 +117,7 @@ async function fetchWeather() {
 /* ── Fetch: NOAA Tides ─────────────────────────── */
 async function fetchTides() {
   const date = todayNoaaDate();
-  const url  = [
+  const url = [
     'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter',
     `?product=predictions`,
     `&application=biscayne_fish_watch`,
@@ -131,7 +131,7 @@ async function fetchTides() {
     `&format=json`
   ].join('');
 
-  const res  = await fetch(url);
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`NOAA: ${res.status} ${res.statusText}`);
   const data = await res.json();
 
@@ -163,7 +163,7 @@ function evaluateTideWindow(predictions) {
   const highs = predictions
     .filter(p => p.type === 'H')
     .map(p => ({
-      date:   new Date(p.t),   // "YYYY-MM-DD HH:MM" parsed as local time
+      date: new Date(p.t),   // "YYYY-MM-DD HH:MM" parsed as local time
       height: parseFloat(p.v)
     }));
 
@@ -179,13 +179,13 @@ function evaluateTideWindow(predictions) {
     const d = Math.abs(now - highs[i].date.getTime());
     if (d < minDelta) {
       minDelta = d;
-      nearest  = highs[i];
+      nearest = highs[i];
     }
   }
 
-  const deltaMs      = now - nearest.date.getTime();  // positive = past high tide
+  const deltaMs = now - nearest.date.getTime();  // positive = past high tide
   const deltaMinutes = Math.round(deltaMs / 60000);
-  const inWindow     = Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
+  const inWindow = Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
 
   return { inWindow, nearestHigh: nearest, deltaMinutes, allHighs: highs, allPredictions: predictions };
 }
@@ -203,10 +203,10 @@ function renderTideTimeline(predictions, nearestHigh) {
 
   predictions.forEach(p => {
     const eventDate = new Date(p.t);
-    const isHigh    = p.type === 'H';
+    const isHigh = p.type === 'H';
     const isNearest = nearestHigh && Math.abs(eventDate - nearestHigh.date) < 60000;
-    const deltaMs   = nowMs - eventDate.getTime();
-    const inWin     = isHigh && Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
+    const deltaMs = nowMs - eventDate.getTime();
+    const inWin = isHigh && Math.abs(deltaMs) <= TIDE_WINDOW_HOURS * MS_PER_HOUR;
 
     const el = document.createElement('div');
     el.className = 'tide-event' + (isNearest ? ' highlight' : '') + (inWin ? ' in-window' : '');
@@ -229,7 +229,7 @@ function renderTideTimeline(predictions, nearestHigh) {
 
     if (inWin) {
       const tag = document.createElement('div');
-      tag.className   = 'tide-window-tag';
+      tag.className = 'tide-window-tag';
       tag.textContent = '±2h Window';
       el.appendChild(tag);
     }
@@ -246,8 +246,8 @@ async function init() {
 
     /* ─── Weather: wind ─── */
     const windSpeedMph = weatherData.wind?.speed ?? 0;   // OWM imperial already returns mph
-    const windDir      = weatherData.wind?.deg  ?? null;
-    const windGust     = weatherData.wind?.gust ?? null;
+    const windDir = weatherData.wind?.deg ?? null;
+    const windGust = weatherData.wind?.gust ?? null;
 
     const windOk = windSpeedMph < WIND_THRESHOLD_MPH;
 
@@ -260,9 +260,9 @@ async function init() {
     /* ─── Weather: rain ─── */
     // OWM "rain" object: { "1h": mm_in_last_hour, "3h": ... }
     const rainMm1h = weatherData.rain?.['1h'] ?? 0;
-    const rainOk   = rainMm1h === 0;
+    const rainOk = rainMm1h === 0;
 
-    rainValue.textContent  = rainMm1h > 0 ? `${rainMm1h.toFixed(1)} mm` : 'None';
+    rainValue.textContent = rainMm1h > 0 ? `${rainMm1h.toFixed(1)} mm` : 'None';
     rainDetail.textContent = rainOk
       ? 'No precipitation in the last hour'
       : `${rainMm1h.toFixed(1)} mm in past hour`;
@@ -278,7 +278,7 @@ async function init() {
       tideValText = 'N/A';
       tideDetText = 'No high tide data today';
     } else {
-      const absDelta  = Math.abs(deltaMinutes);
+      const absDelta = Math.abs(deltaMinutes);
       const direction = deltaMinutes > 0 ? 'after' : 'before';
       tideValText = inWindow ? `±${TIDE_WINDOW_HOURS}h ✓` : `Outside window`;
       tideDetText = absDelta < 1
@@ -286,7 +286,7 @@ async function init() {
         : `${fmtDuration(absDelta)} ${direction} high at ${fmtTime(nearestHigh.date)}`;
     }
 
-    tideValue.textContent  = tideValText;
+    tideValue.textContent = tideValText;
     tideDetail.textContent = tideDetText;
     applyStatus(tideCard, tideDot, inWindow ? 'good' : 'poor');
 
@@ -297,17 +297,17 @@ async function init() {
 
     let rating, subtitle;
     if (score === 3) {
-      rating   = 'OPTIMAL';
+      rating = 'OPTIMAL';
       subtitle = 'All conditions are favorable — great time to head out!';
     } else if (score === 2) {
-      rating   = 'FAIR';
+      rating = 'FAIR';
       const bad = [];
-      if (!windOk)   bad.push(`wind at ${windSpeedMph.toFixed(1)} mph`);
+      if (!windOk) bad.push(`wind at ${windSpeedMph.toFixed(1)} mph`);
       if (!inWindow) bad.push('outside prime tide window');
-      if (!rainOk)   bad.push('recent rain detected');
+      if (!rainOk) bad.push('recent rain detected');
       subtitle = `Expect some challenges: ${bad.join(', ')}.`;
     } else {
-      rating   = 'POOR';
+      rating = 'POOR';
       subtitle = 'Conditions are unfavorable. Consider waiting for better conditions.';
     }
 
@@ -319,7 +319,7 @@ async function init() {
     condBadge.classList.remove('loading');
     condBadge.classList.add('poor');
     condText.textContent = 'Error';
-    condSub.textContent  = `Could not load data: ${err.message}`;
+    condSub.textContent = `Could not load data: ${err.message}`;
 
     [windValue, tideValue, rainValue].forEach(el => { el.textContent = 'Error'; el.style.color = 'var(--poor)'; });
     [windDetail, tideDetail, rainDetail].forEach(el => { el.textContent = err.message; });
