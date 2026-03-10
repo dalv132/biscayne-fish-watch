@@ -38,11 +38,13 @@ jobs:
       #    nothing is ever committed back to the repo.
       - name: Inject secrets into script.js
         env:
-          OWM_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          DB_TOKEN: ${{ secrets.DATABASE_TOKEN }}
+          APPS_URL:  ${{ secrets.APPS_SCRIPT_URL }}
+          OWM_KEY:   ${{ secrets.OPENWEATHER_KEY }}
+          DB_TOKEN:  ${{ secrets.DATABASE_TOKEN }}
         run: |
-          sed -i "s|__OPENWEATHER_API_KEY__|${OWM_KEY}|g"  script.js
-          sed -i "s|__DATABASE_TOKEN__|${DB_TOKEN}|g"       script.js
+          sed -i "s|__APPS_SCRIPT_URL__|${APPS_URL}|g"  script.js
+          sed -i "s|__OPENWEATHER_KEY__|${OWM_KEY}|g"   script.js
+          sed -i "s|__DATABASE_TOKEN__|${DB_TOKEN}|g"   script.js
           echo "✅ Secret placeholders substituted."
 
       # 3. Configure the GitHub Pages environment.

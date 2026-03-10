@@ -34,7 +34,7 @@
 // ⚠️  Raw values are injected at deploy time by GitHub Actions (see .github/workflows/deploy.yml).
 // For local development, temporarily replace the placeholders below with your real keys,
 // but do NOT commit those changes.
-const OPENWEATHER_API_KEY = '__OPENWEATHER_API_KEY__';
+const OPENWEATHER_API_KEY = '__OPENWEATHER_KEY__';
 
 const LAT = 25.788996;
 const LON = -80.172930;
@@ -60,8 +60,8 @@ const WATER_TEMP_HEAT_STRESS = 88; // > 88°F forces "Fair - Fish may be deep"
 const WET_SEASON_RAIN_PENALTY_IN = 0.5;
 
 /* ── Backend / Sheet connection ─────────────────── */
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxkKPbZAux_SXZycXgS2_dD8UneHTvTNjTW-EDmDoXpCVpYvLg11xmw7-T1oF8ti90/exec';
-const DATABASE_TOKEN = '__DATABASE_TOKEN__'; // injected by CI — see deploy.yml
+const APPS_SCRIPT_URL = '__APPS_SCRIPT_URL__'; // injected by CI — see deploy.yml
+const DATABASE_TOKEN = '__DATABASE_TOKEN__';  // injected by CI — see deploy.yml
 
 /* ── Season helper ─────────────────────────────── */
 /**
@@ -390,25 +390,20 @@ async function sendSighting(label) {
       rainMm
     };
 
-    console.log('[BiscayneFishWatch] sendSighting payload:', payload);
+    console.log('[Biscayne-Watch] Data Packet Sent:', payload);
 
-    // Google Apps Script requires no-cors for cross-origin POST requests.
-    // With mode:'no-cors' the response is opaque — the browser blocks access to
-    // the status code and body entirely. A fetch that doesn't throw means the
-    // request was sent successfully; we treat that as a success.
-    const body = new URLSearchParams();
-    Object.entries(payload).forEach(([k, v]) => body.append(k, v ?? ''));
-
+    // Google Apps Script (no-cors): body must be plain JSON string sent as text/plain
+    // to avoid a CORS preflight. The response is opaque — we cannot read status or
+    // body, so a non-throwing fetch is treated as a successful dispatch.
     await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       mode: 'no-cors',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString()
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
     });
 
-    // If fetch didn't throw, the request was dispatched successfully.
-    console.log('[BiscayneFishWatch] sendSighting dispatched (opaque no-cors response).');
-    return { ok: true, result: null };
+    console.log('[Biscayne-Watch] Dispatch complete (opaque no-cors response — no status available).');
+    return { ok: true };
 
   } catch (err) {
     console.error('[BiscayneFishWatch] sendSighting error:', err);
@@ -632,15 +627,15 @@ async function init() {
 // Kick off on page load
 init();
 
-/* ── Live Report: sighting button logic ──────── */
+/* ── Live Report: sighting button logic ─────────────── */
 (function initSightingButtons() {
   const syncStatus = document.getElementById('sync-status');
   const syncLabel = document.getElementById('sync-label');
   const allBtns = document.querySelectorAll('.sighting-btn');
+  const LOCK_MS = 5000; // 5 s lock to prevent duplicate entries
 
-  /** Set the sync indicator to one of: 'idle' | 'syncing' | 'success' | 'error' */
   function setSyncState(state, message) {
-    syncStatus.classList.remove('syncing', 'success', 'error');
+    syncStatus.classList.remove('syncing', 'success');
     if (state !== 'idle') syncStatus.classList.add(state);
     syncLabel.textContent = message;
   }
@@ -651,24 +646,26 @@ init();
       const labels = { 0: 'No Fish', 1: 'Some Fish', 2: 'Lots of Fish' };
       const label = labels[value] ?? String(value);
 
-      // Lock UI while sending
+      // Disable all buttons for LOCK_MS to prevent duplicate entries
       allBtns.forEach(b => { b.disabled = true; });
-      setSyncState('syncing', 'Syncing…');
+      setSyncState('syncing', 'Sending…');
 
-      const result = await sendSighting(label);
+      // Fire-and-forget — no-cors hides the server response so we treat
+      // any non-throwing dispatch as success.
+      await sendSighting(label);
 
-      if (result.ok) {
-        setSyncState('success', 'Logged ✓');
-        // Reset to idle after the glow animation finishes (~6 s for 3 iterations of 2 s each)
-        setTimeout(() => setSyncState('idle', 'Ready'), 6500);
-      } else {
-        setSyncState('error', 'Sync Error');
-        console.warn('[BiscayneFishWatch] Sighting sync failed:', result.error);
-        setTimeout(() => setSyncState('idle', 'Ready'), 4000);
-      }
+      // Green pulse: add class to the clicked button for 2 s
+      btn.classList.add('btn-broadcast');
+      setTimeout(() => btn.classList.remove('btn-broadcast'), 2000);
 
-      // Re-enable buttons
-      allBtns.forEach(b => { b.disabled = false; });
+      // Sync pill: show success message
+      setSyncState('success', 'Sighting Broadcasted to Cloud.');
+
+      // After LOCK_MS re-enable buttons and reset pill
+      setTimeout(() => {
+        allBtns.forEach(b => { b.disabled = false; });
+        setSyncState('idle', 'Ready');
+      }, LOCK_MS);
     });
   });
 })();
