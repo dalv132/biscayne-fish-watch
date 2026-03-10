@@ -392,19 +392,23 @@ async function sendSighting(label) {
 
     console.log('[BiscayneFishWatch] sendSighting payload:', payload);
 
-    const res = await fetch(APPS_SCRIPT_URL, {
+    // Google Apps Script requires no-cors for cross-origin POST requests.
+    // With mode:'no-cors' the response is opaque — the browser blocks access to
+    // the status code and body entirely. A fetch that doesn't throw means the
+    // request was sent successfully; we treat that as a success.
+    const body = new URLSearchParams();
+    Object.entries(payload).forEach(([k, v]) => body.append(k, v ?? ''));
+
+    await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
     });
 
-    if (!res.ok) {
-      throw new Error(`Server responded ${res.status} ${res.statusText}`);
-    }
-
-    const result = await res.json();
-    console.log('[BiscayneFishWatch] sendSighting success:', result);
-    return { ok: true, result };
+    // If fetch didn't throw, the request was dispatched successfully.
+    console.log('[BiscayneFishWatch] sendSighting dispatched (opaque no-cors response).');
+    return { ok: true, result: null };
 
   } catch (err) {
     console.error('[BiscayneFishWatch] sendSighting error:', err);
