@@ -34,7 +34,7 @@
 // ⚠️  Raw values are injected at deploy time by GitHub Actions (see .github/workflows/deploy.yml).
 // For local development, temporarily replace the placeholders below with your real keys,
 // but do NOT commit those changes.
-const OPENWEATHER_API_KEY = '__OPENWEATHER_KEY__';
+const OPENWEATHER_API_KEY = '__OPENWEATHER_API_KEY__';
 
 const LAT = 25.788996;
 const LON = -80.172930;
