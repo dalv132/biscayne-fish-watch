@@ -62,6 +62,7 @@ const WET_SEASON_RAIN_PENALTY_IN = 0.5;
 /* ── Backend / Sheet connection ─────────────────── */
 const APPS_SCRIPT_URL = '__APPS_SCRIPT_URL__'; // injected by CI — see deploy.yml
 const DATABASE_TOKEN = '__DATABASE_TOKEN__';  // injected by CI — see deploy.yml
+console.log('Debug - URL Length:', APPS_SCRIPT_URL.length); // ✅ > 10 means secret was injected
 
 /* ── Season helper ─────────────────────────────── */
 /**
@@ -347,7 +348,7 @@ function renderTideTimeline(predictions, nearestHigh) {
  *   timestamp  — ISO-8601 string (local device time)
  *   windSpeed  — mph (number)
  *   windDeg    — degrees (number | null)
- *   tideStatus — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   tideLevel  — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
  *   tempF      — °F (number | null)
  *   rainMm     — mm detected in last 1–3 h (number)
  *
@@ -375,7 +376,7 @@ async function sendSighting(label) {
     // Tide
     const predictions = tideData.predictions ?? [];
     const { inWindow } = evaluateTideWindow(predictions);
-    const tideStatus = predictions.length === 0
+    const tideLevel = predictions.length === 0
       ? 'NO_DATA'
       : inWindow ? 'IN_WINDOW' : 'OUTSIDE_WINDOW';
 
@@ -385,7 +386,7 @@ async function sendSighting(label) {
       timestamp: new Date().toISOString(),
       windSpeed,
       windDeg,
-      tideStatus,
+      tideLevel,
       tempF: waterTempF,
       rainMm
     };
@@ -398,7 +399,7 @@ async function sendSighting(label) {
     await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify(payload)
     });
 
