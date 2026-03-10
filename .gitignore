@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# Local dev — never commit real key values
+.env
+.env.local

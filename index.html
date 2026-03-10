@@ -153,6 +153,35 @@
             </div>
         </section>
 
+        <!-- Live Report -->
+        <section class="live-report-section" aria-label="Log a fish sighting">
+            <div class="live-report-header">
+                <h2 class="section-heading">🎣 Live Report</h2>
+                <div class="sync-status" id="sync-status" aria-live="polite">
+                    <span class="sync-dot" id="sync-dot"></span>
+                    <span class="sync-label" id="sync-label">Ready</span>
+                </div>
+            </div>
+            <p class="live-report-sub">Tap to log current fish activity — conditions are recorded automatically.</p>
+            <div class="sighting-buttons" role="group" aria-label="Fish activity level">
+                <button class="sighting-btn btn-no-fish" id="btn-no-fish" data-value="0" type="button">
+                    <span class="sighting-emoji">🚫</span>
+                    <span class="sighting-label">No Fish</span>
+                    <span class="sighting-value">0</span>
+                </button>
+                <button class="sighting-btn btn-some-fish" id="btn-some-fish" data-value="1" type="button">
+                    <span class="sighting-emoji">🐟</span>
+                    <span class="sighting-label">Some Fish</span>
+                    <span class="sighting-value">1</span>
+                </button>
+                <button class="sighting-btn btn-lots-fish" id="btn-lots-fish" data-value="2" type="button">
+                    <span class="sighting-emoji">🦈</span>
+                    <span class="sighting-label">Lots of Fish</span>
+                    <span class="sighting-value">2</span>
+                </button>
+            </div>
+        </section>
+
         <footer class="app-footer">
             <p>Data: <a href="https://openweathermap.org" target="_blank" rel="noopener">OpenWeatherMap</a> &amp; <a
                     href="https://tidesandcurrents.noaa.gov" target="_blank" rel="noopener">NOAA Tides &amp;

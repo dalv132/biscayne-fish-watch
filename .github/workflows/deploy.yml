@@ -1,0 +1,63 @@
+name: Deploy — Static Site Secret Injection
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Triggers: every push to main, or manually from the Actions tab.
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only one deployment runs at a time; in-flight runs are cancelled on new push.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Inject secrets & deploy to GitHub Pages
+    runs-on: ubuntu-latest
+
+    # Required permissions for the OIDC-based Pages deploy action.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # 1. Check out the source (script.js still contains placeholder tokens here).
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 2. Replace placeholder tokens with real secret values using sed.
+      #    The substitution happens only in the Actions runner's temp workspace —
+      #    nothing is ever committed back to the repo.
+      - name: Inject secrets into script.js
+        env:
+          OWM_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          DB_TOKEN: ${{ secrets.DATABASE_TOKEN }}
+        run: |
+          sed -i "s|__OPENWEATHER_API_KEY__|${OWM_KEY}|g"  script.js
+          sed -i "s|__DATABASE_TOKEN__|${DB_TOKEN}|g"       script.js
+          echo "✅ Secret placeholders substituted."
+
+      # 3. Configure the GitHub Pages environment.
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # 4. Upload the whole repo directory (with real keys now in script.js) as
+      #    the Pages artifact.  The artifact is ephemeral — it lives only for
+      #    this deployment.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      # 5. Deploy the artifact to GitHub Pages.
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

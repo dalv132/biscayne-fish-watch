@@ -31,7 +31,10 @@
  */
 
 /* ── Constants ─────────────────────────────────── */
-const OPENWEATHER_API_KEY = '0494e55eedb7fc261cf895d4c4118b25';
+// ⚠️  Raw values are injected at deploy time by GitHub Actions (see .github/workflows/deploy.yml).
+// For local development, temporarily replace the placeholders below with your real keys,
+// but do NOT commit those changes.
+const OPENWEATHER_API_KEY = '__OPENWEATHER_API_KEY__';
 
 const LAT = 25.788996;
 const LON = -80.172930;
@@ -55,6 +58,10 @@ const WATER_TEMP_HEAT_STRESS = 88; // > 88°F forces "Fair - Fish may be deep"
 
 // Wet-season rain penalty threshold (inches in 24 h)
 const WET_SEASON_RAIN_PENALTY_IN = 0.5;
+
+/* ── Backend / Sheet connection ─────────────────── */
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxkKPbZAux_SXZycXgS2_dD8UneHTvTNjTW-EDmDoXpCVpYvLg11xmw7-T1oF8ti90/exec';
+const DATABASE_TOKEN = '__DATABASE_TOKEN__'; // injected by CI — see deploy.yml
 
 /* ── Season helper ─────────────────────────────── */
 /**
@@ -329,6 +336,82 @@ function renderTideTimeline(predictions, nearestHigh) {
   });
 }
 
+/* ── Backend: log a sighting ───────────────────── */
+/**
+ * Collect the latest OpenWeather + NOAA readings and POST them as a
+ * sighting record to the Google Apps Script / Sheet backend.
+ *
+ * Payload fields:
+ *   token      — DATABASE_TOKEN for server-side verification
+ *   label      — caller-supplied sighting label (e.g. 'Permit', 'Snook')
+ *   timestamp  — ISO-8601 string (local device time)
+ *   windSpeed  — mph (number)
+ *   windDeg    — degrees (number | null)
+ *   tideStatus — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   tempF      — °F (number | null)
+ *   rainMm     — mm detected in last 1–3 h (number)
+ *
+ * @param {string} label  A short description of the sighting.
+ * @returns {Promise<{ok: boolean, result?: any, error?: string}>}
+ */
+async function sendSighting(label) {
+  try {
+    // Re-fetch live data so the sighting is always current
+    const [weatherData, tideData, { tempF: waterTempF }] = await Promise.all([
+      fetchWeather(),
+      fetchTides(),
+      fetchWaterTemp()
+    ]);
+
+    // Wind
+    const windSpeed = weatherData.wind?.speed ?? 0;   // mph (imperial units requested)
+    const windDeg = weatherData.wind?.deg ?? null;
+
+    // Rain (last 1-3 h window)
+    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
+    const rainMm3h = weatherData.rain?.['3h'] ?? 0;
+    const rainMm = rainMm1h > 0 ? rainMm1h : rainMm3h;
+
+    // Tide
+    const predictions = tideData.predictions ?? [];
+    const { inWindow } = evaluateTideWindow(predictions);
+    const tideStatus = predictions.length === 0
+      ? 'NO_DATA'
+      : inWindow ? 'IN_WINDOW' : 'OUTSIDE_WINDOW';
+
+    const payload = {
+      token: DATABASE_TOKEN,
+      label: String(label),
+      timestamp: new Date().toISOString(),
+      windSpeed,
+      windDeg,
+      tideStatus,
+      tempF: waterTempF,
+      rainMm
+    };
+
+    console.log('[BiscayneFishWatch] sendSighting payload:', payload);
+
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      throw new Error(`Server responded ${res.status} ${res.statusText}`);
+    }
+
+    const result = await res.json();
+    console.log('[BiscayneFishWatch] sendSighting success:', result);
+    return { ok: true, result };
+
+  } catch (err) {
+    console.error('[BiscayneFishWatch] sendSighting error:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 /* ── Main orchestration ────────────────────────── */
 async function init() {
   try {
@@ -544,3 +627,44 @@ async function init() {
 
 // Kick off on page load
 init();
+
+/* ── Live Report: sighting button logic ──────── */
+(function initSightingButtons() {
+  const syncStatus = document.getElementById('sync-status');
+  const syncLabel = document.getElementById('sync-label');
+  const allBtns = document.querySelectorAll('.sighting-btn');
+
+  /** Set the sync indicator to one of: 'idle' | 'syncing' | 'success' | 'error' */
+  function setSyncState(state, message) {
+    syncStatus.classList.remove('syncing', 'success', 'error');
+    if (state !== 'idle') syncStatus.classList.add(state);
+    syncLabel.textContent = message;
+  }
+
+  allBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const value = parseInt(btn.dataset.value, 10);
+      const labels = { 0: 'No Fish', 1: 'Some Fish', 2: 'Lots of Fish' };
+      const label = labels[value] ?? String(value);
+
+      // Lock UI while sending
+      allBtns.forEach(b => { b.disabled = true; });
+      setSyncState('syncing', 'Syncing…');
+
+      const result = await sendSighting(label);
+
+      if (result.ok) {
+        setSyncState('success', 'Logged ✓');
+        // Reset to idle after the glow animation finishes (~6 s for 3 iterations of 2 s each)
+        setTimeout(() => setSyncState('idle', 'Ready'), 6500);
+      } else {
+        setSyncState('error', 'Sync Error');
+        console.warn('[BiscayneFishWatch] Sighting sync failed:', result.error);
+        setTimeout(() => setSyncState('idle', 'Ready'), 4000);
+      }
+
+      // Re-enable buttons
+      allBtns.forEach(b => { b.disabled = false; });
+    });
+  });
+})();

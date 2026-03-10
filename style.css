@@ -506,3 +506,266 @@ main {
   color: var(--poor);
   font-size: 0.85rem;
 }
+
+/* ── Live Report section ─────────────────────── */
+:root {
+  --miami-coral: #ff6b6b;
+  --miami-yellow: #ffd93d;
+  --miami-teal: #00bfa5;
+  --miami-purple: #a855f7;
+  --sync-green: #22c55e;
+}
+
+.live-report-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 2rem 1.5rem;
+  border-radius: calc(var(--radius) + 4px);
+  background: linear-gradient(135deg,
+      rgba(255, 107, 107, 0.06) 0%,
+      rgba(0, 191, 165, 0.08) 50%,
+      rgba(168, 85, 247, 0.06) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle Miami-stripe accent at top */
+.live-report-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+      var(--miami-coral), var(--miami-yellow),
+      var(--miami-teal), var(--miami-purple));
+  border-radius: 3px 3px 0 0;
+}
+
+.live-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.live-report-sub {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 420px;
+}
+
+/* ── Sighting buttons grid ───────────────────── */
+.sighting-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+@media (max-width: 540px) {
+  .sighting-buttons {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sighting-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.6rem 1rem;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
+  position: relative;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  /* High-contrast white text for outdoor readability */
+  color: #ffffff;
+  font-family: var(--font);
+}
+
+.sighting-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sighting-btn:active::after {
+  opacity: 1;
+}
+
+.sighting-btn:hover {
+  transform: translateY(-4px) scale(1.02);
+}
+
+.sighting-btn:active {
+  transform: scale(0.96);
+}
+
+.sighting-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* No Fish — red/coral */
+.btn-no-fish {
+  background: linear-gradient(135deg, #c0392b, #e74c3c);
+  border-color: rgba(255, 107, 107, 0.5);
+  box-shadow: 0 6px 24px rgba(231, 76, 60, 0.35);
+}
+
+.btn-no-fish:hover {
+  box-shadow: 0 10px 32px rgba(231, 76, 60, 0.55);
+  filter: brightness(1.1);
+}
+
+/* Some Fish — golden yellow */
+.btn-some-fish {
+  background: linear-gradient(135deg, #b7791f, #d97706);
+  border-color: rgba(255, 217, 61, 0.5);
+  box-shadow: 0 6px 24px rgba(217, 119, 6, 0.35);
+}
+
+.btn-some-fish:hover {
+  box-shadow: 0 10px 32px rgba(255, 217, 61, 0.55);
+  filter: brightness(1.1);
+}
+
+/* Lots of Fish — vibrant teal/green */
+.btn-lots-fish {
+  background: linear-gradient(135deg, #047857, #059669);
+  border-color: rgba(0, 224, 160, 0.5);
+  box-shadow: 0 6px 24px rgba(5, 150, 105, 0.4);
+}
+
+.btn-lots-fish:hover {
+  box-shadow: 0 10px 32px rgba(0, 224, 160, 0.6);
+  filter: brightness(1.1);
+}
+
+.sighting-emoji {
+  font-size: 2.4rem;
+  line-height: 1;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+
+.sighting-label {
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.sighting-value {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+/* ── Data Sync Status indicator ──────────────── */
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.3rem 0.8rem 0.3rem 0.55rem;
+  border-radius: 999px;
+  transition: color 0.4s, border-color 0.4s, background 0.4s;
+}
+
+.sync-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  transition: background 0.4s, box-shadow 0.4s;
+}
+
+/* States applied via JS */
+.sync-status.syncing .sync-dot {
+  background: var(--miami-yellow);
+  box-shadow: 0 0 8px var(--miami-yellow);
+  animation: sync-pulse 0.8s ease-in-out infinite;
+}
+
+.sync-status.syncing {
+  color: var(--miami-yellow);
+  border-color: rgba(255, 217, 61, 0.4);
+}
+
+.sync-status.success .sync-dot {
+  background: var(--sync-green);
+  box-shadow: 0 0 12px var(--sync-green), 0 0 24px rgba(34, 197, 94, 0.4);
+  animation: sync-glow 2s ease-in-out 3;
+}
+
+.sync-status.success {
+  color: var(--sync-green);
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.sync-status.error .sync-dot {
+  background: var(--poor);
+  box-shadow: 0 0 8px var(--poor);
+}
+
+.sync-status.error {
+  color: var(--poor);
+  border-color: rgba(255, 82, 82, 0.4);
+}
+
+@keyframes sync-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes sync-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 8px var(--sync-green);
+  }
+
+  50% {
+    box-shadow: 0 0 20px var(--sync-green), 0 0 36px rgba(34, 197, 94, 0.5);
+  }
+}
