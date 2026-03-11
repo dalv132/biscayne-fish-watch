@@ -243,7 +243,16 @@ async function fetchWeather() {
   const url = `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&appid=${OPENWEATHER_API_KEY}&units=imperial`;
   console.log('Current OpenWeather URL:', url.split('appid=')[0] + 'appid=HIDDEN');
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`OpenWeatherMap: ${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // Extract the specific error message from OWM's JSON body (e.g. "Invalid API key", "account is blocked")
+    let owmMessage = res.statusText;
+    try {
+      const errBody = await res.json();
+      owmMessage = errBody.message ?? owmMessage;
+    } catch (_) { /* body not JSON — keep statusText */ }
+    console.warn(`[BiscayneFishWatch] OpenWeatherMap ${res.status} error:`, owmMessage);
+    throw new Error(`OpenWeatherMap: ${res.status} — ${owmMessage}`);
+  }
   const data = await res.json();
   console.log('[BiscayneFishWatch] OpenWeatherMap raw data:', data);
   return data;
@@ -614,6 +623,7 @@ async function updateProgressCount() {
 async function init() {
   // Gate: keep buttons disabled until all data is ready
   setSightingButtonsEnabled(false);
+  console.log('System Check - Key Status:', OPENWEATHER_API_KEY.startsWith('__') ? 'Placeholder (NOT injected — will 401)' : 'Injected ✅');
 
   try {
     // Fetch all four data sources in parallel
