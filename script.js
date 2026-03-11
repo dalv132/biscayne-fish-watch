@@ -2,8 +2,8 @@
  * Biscayne Bay Fish Watch — script.js
  *
  * Data sources:
- *   1. OpenWeatherMap "Current Weather" API — wind speed & rain
- *   2. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina)
+ *   1. OpenWeatherMap "Current Weather" API — wind speed, rain, pressure
+ *   2. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina) — hi/lo & hourly
  *   3. NOAA CO-OPS Water Temp    — Station 8723214 (Virginia Key),
  *                                   fallback: mi0401 (Dodge Island)
  *
@@ -28,6 +28,11 @@
  * Water Temperature (NOAA — Virginia Key / Dodge Island):
  *   Bonus range: 74°F – 82°F → OPTIMAL bonus for peak fish activity.
  *   > 88°F → Override status to "Fair - Fish may be deep."
+ *
+ * Deep Data additions:
+ *   Pressure    — main.pressure from OpenWeatherMap (hPa)
+ *   Tide Trend  — "Rising" / "Falling" from hourly NOAA predictions
+ *   Moon Phase  — 0.0–1.0 via synodic cycle calculation
  */
 
 /* ── Constants ─────────────────────────────────── */
@@ -75,6 +80,37 @@ function getCurrentSeason() {
   const month = new Date().getMonth() + 1; // 1-indexed
   const isDry = month >= 11 || month <= 4;
   return { name: isDry ? 'Dry Season' : 'Wet Season', isDry };
+}
+
+/* ── Moon Phase ────────────────────────────────── */
+/**
+ * Calculate the current lunar phase using the synodic cycle.
+ * Reference new moon: January 6, 2000 at 18:14 UTC.
+ * @returns {number} Value 0.0–1.0 (0 = new moon, 0.5 = full moon, 1.0 ≈ new moon again)
+ */
+function getMoonPhase() {
+  const KNOWN_NEW_MOON_MS = Date.UTC(2000, 0, 6, 18, 14, 0); // Jan 6, 2000 18:14 UTC
+  const SYNODIC_PERIOD_MS = 29.530588853 * 24 * 3600 * 1000;  // 29.53 days in ms
+  const elapsed = Date.now() - KNOWN_NEW_MOON_MS;
+  const phase = ((elapsed % SYNODIC_PERIOD_MS) / SYNODIC_PERIOD_MS + 1) % 1;
+  return Math.round(phase * 1000) / 1000; // 3 decimal places
+}
+
+/**
+ * Return a human-readable moon phase label for a 0–1 phase value.
+ * @param {number} phase
+ * @returns {string}
+ */
+function getMoonPhaseLabel(phase) {
+  if (phase < 0.0625) return '🌑 New Moon';
+  if (phase < 0.1875) return '🌒 Waxing Crescent';
+  if (phase < 0.3125) return '🌓 First Quarter';
+  if (phase < 0.4375) return '🌔 Waxing Gibbous';
+  if (phase < 0.5625) return '🌕 Full Moon';
+  if (phase < 0.6875) return '🌖 Waning Gibbous';
+  if (phase < 0.8125) return '🌗 Last Quarter';
+  if (phase < 0.9375) return '🌘 Waning Crescent';
+  return '🌑 New Moon';
 }
 
 /* ── Helpers ───────────────────────────────────── */
@@ -143,6 +179,11 @@ const tempCard = document.getElementById('temp-card');
 
 const tideTimeline = document.getElementById('tide-timeline');
 
+/* ── Sighting button refs ──────────────────────── */
+const allSightingBtns = document.querySelectorAll('.sighting-btn');
+const syncStatus = document.getElementById('sync-status');
+const syncLabel = document.getElementById('sync-label');
+
 /* ── UI helpers ────────────────────────────────── */
 
 /**
@@ -167,6 +208,36 @@ function renderCondition(rating, metricsText) {
   lastUpdated.textContent = `Last updated: ${fmtTime(new Date())}`;
 }
 
+/** Set sync pill state */
+function setSyncState(state, message) {
+  syncStatus.classList.remove('syncing', 'success');
+  if (state !== 'idle') syncStatus.classList.add(state);
+  syncLabel.textContent = message;
+}
+
+/**
+ * Enable or disable all sighting buttons.
+ * Also updates the sync pill message when disabling (loading state).
+ */
+function setSightingButtonsEnabled(enabled) {
+  allSightingBtns.forEach(btn => {
+    btn.disabled = !enabled;
+    if (!enabled) {
+      btn.style.opacity = '0.45';
+      btn.style.cursor = 'not-allowed';
+    } else {
+      btn.style.opacity = '';
+      btn.style.cursor = '';
+    }
+  });
+
+  if (!enabled) {
+    setSyncState('syncing', 'Loading Environment Data…');
+  } else {
+    setSyncState('idle', 'Ready to Log');
+  }
+}
+
 /* ── Fetch: OpenWeatherMap ─────────────────────── */
 async function fetchWeather() {
   const url = `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&appid=${OPENWEATHER_API_KEY}&units=imperial`;
@@ -177,7 +248,7 @@ async function fetchWeather() {
   return data;
 }
 
-/* ── Fetch: NOAA Tides ─────────────────────────── */
+/* ── Fetch: NOAA Tides (hi/lo) ─────────────────── */
 async function fetchTides() {
   const date = todayNoaaDate();
   const url = [
@@ -200,6 +271,76 @@ async function fetchTides() {
   console.log(`[BiscayneFishWatch] NOAA Tides raw data (Station ${NOAA_TIDE_STATION}):`, data);
   if (data.error) throw new Error(`NOAA Tides error: ${data.error.message}`);
   return data;
+}
+
+/* ── Fetch: NOAA Hourly Tides (for Tide Trend) ── */
+/**
+ * Fetches hourly tide predictions for today. Used to compute tide trend
+ * by comparing the current hour's height to the previous hour's height.
+ * @returns {Promise<Array<{t: string, v: string}>>}
+ */
+async function fetchHourlyTides() {
+  const date = todayNoaaDate();
+  const url = [
+    'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter',
+    `?product=predictions`,
+    `&application=biscayne_fish_watch`,
+    `&begin_date=${date}`,
+    `&end_date=${date}`,
+    `&datum=MLLW`,
+    `&station=${NOAA_TIDE_STATION}`,
+    `&time_zone=lst_ldt`,
+    `&interval=h`,
+    `&units=english`,
+    `&format=json`
+  ].join('');
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[BiscayneFishWatch] NOAA Hourly Tides HTTP ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    if (data.error) {
+      console.warn('[BiscayneFishWatch] NOAA Hourly Tides error:', data.error.message);
+      return [];
+    }
+    console.log('[BiscayneFishWatch] NOAA Hourly Tides raw data:', data);
+    return data.predictions ?? [];
+  } catch (e) {
+    console.warn('[BiscayneFishWatch] fetchHourlyTides failed:', e.message);
+    return [];
+  }
+}
+
+/* ── Tide Trend calculation ────────────────────── */
+/**
+ * Derive tide trend by comparing current hour vs. prior hour in hourly predictions.
+ * @param {Array<{t: string, v: string}>} hourlyPredictions
+ * @returns {'Rising'|'Falling'|'Unknown'}
+ */
+function computeTideTrend(hourlyPredictions) {
+  if (!hourlyPredictions || hourlyPredictions.length < 2) return 'Unknown';
+
+  const nowMs = Date.now();
+
+  // Find the entry closest to (but not after) the current time
+  let currentIdx = -1;
+  for (let i = 0; i < hourlyPredictions.length; i++) {
+    const t = new Date(hourlyPredictions[i].t).getTime();
+    if (t <= nowMs) currentIdx = i;
+  }
+
+  if (currentIdx < 1) return 'Unknown'; // no previous hour available
+
+  const currentHeight = parseFloat(hourlyPredictions[currentIdx].v);
+  const previousHeight = parseFloat(hourlyPredictions[currentIdx - 1].v);
+
+  if (isNaN(currentHeight) || isNaN(previousHeight)) return 'Unknown';
+
+  console.log(`[BiscayneFishWatch] Tide Trend: ${previousHeight.toFixed(2)} ft → ${currentHeight.toFixed(2)} ft`);
+  return currentHeight > previousHeight ? 'Rising' : 'Falling';
 }
 
 /* ── Fetch: NOAA Water Temperature ────────────── */
@@ -337,44 +478,59 @@ function renderTideTimeline(predictions, nearestHigh) {
   });
 }
 
+/* ── Cached live data (set after init()) ────────── */
+// Shared between init() and sendSighting() so sighting payloads are instant.
+let _cachedWeather = null;
+let _cachedTideData = null;
+let _cachedWaterTemp = null;
+let _cachedTideTrend = 'Unknown';
+let _cachedMoonPhase = 0;
+let _cachedSeason = null;
+let _dataReady = false;
+
 /* ── Backend: log a sighting ───────────────────── */
 /**
- * Collect the latest OpenWeather + NOAA readings and POST them as a
- * sighting record to the Google Apps Script / Sheet backend.
+ * Build and POST a sighting record to the Google Apps Script / Sheet backend.
+ * Uses cached live data from the last init() run so no extra fetches are needed.
  *
- * Payload fields:
+ * Payload fields (Deep Data):
  *   token      — DATABASE_TOKEN for server-side verification
- *   label      — caller-supplied sighting label (e.g. 'Permit', 'Snook')
+ *   label      — sighting label (e.g. 'No Fish', 'Some Fish', 'Lots of Fish')
  *   timestamp  — ISO-8601 string (local device time)
+ *   season     — 'Dry Season' | 'Wet Season'
  *   windSpeed  — mph (number)
  *   windDeg    — degrees (number | null)
+ *   pressure   — hPa from OpenWeatherMap main.pressure (number | null)
  *   tideLevel  — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
- *   tempF      — °F (number | null)
- *   rainMm     — mm detected in last 1–3 h (number)
+ *   tideTrend  — 'Rising' | 'Falling' | 'Unknown'
+ *   waterTemp  — °F (number | null)
+ *   rain24h    — mm rain detected in last 1–3 h window (number)
+ *   moonPhase  — 0.0–1.0 synodic phase
  *
  * @param {string} label  A short description of the sighting.
  * @returns {Promise<{ok: boolean, result?: any, error?: string}>}
  */
 async function sendSighting(label) {
   try {
-    // Re-fetch live data so the sighting is always current
-    const [weatherData, tideData, { tempF: waterTempF }] = await Promise.all([
-      fetchWeather(),
-      fetchTides(),
-      fetchWaterTemp()
-    ]);
+    // Use cached data if available; otherwise re-fetch
+    const weatherData = _cachedWeather;
+    const tideData = _cachedTideData;
+    const waterTempF = _cachedWaterTemp;
 
     // Wind
-    const windSpeed = weatherData.wind?.speed ?? 0;   // mph (imperial units requested)
-    const windDeg = weatherData.wind?.deg ?? null;
+    const windSpeed = weatherData?.wind?.speed ?? 0;   // mph (imperial)
+    const windDeg = weatherData?.wind?.deg ?? null;
 
-    // Rain (last 1-3 h window)
-    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
-    const rainMm3h = weatherData.rain?.['3h'] ?? 0;
-    const rainMm = rainMm1h > 0 ? rainMm1h : rainMm3h;
+    // Pressure (hPa)
+    const pressure = weatherData?.main?.pressure ?? null;
+
+    // Rain (last 1–3 h window)
+    const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
+    const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
+    const rain24h = rainMm1h > 0 ? rainMm1h : rainMm3h;
 
     // Tide
-    const predictions = tideData.predictions ?? [];
+    const predictions = tideData?.predictions ?? [];
     const { inWindow } = evaluateTideWindow(predictions);
     const tideLevel = predictions.length === 0
       ? 'NO_DATA'
@@ -384,11 +540,15 @@ async function sendSighting(label) {
       token: DATABASE_TOKEN,
       label: String(label),
       timestamp: new Date().toISOString(),
+      season: _cachedSeason?.name ?? 'Unknown',
       windSpeed,
       windDeg,
+      pressure,
       tideLevel,
-      tempF: waterTempF,
-      rainMm
+      tideTrend: _cachedTideTrend,
+      waterTemp: waterTempF,
+      rain24h,
+      moonPhase: _cachedMoonPhase
     };
 
     console.log('[Biscayne-Watch] Data Packet Sent:', payload);
@@ -414,18 +574,38 @@ async function sendSighting(label) {
 
 /* ── Main orchestration ────────────────────────── */
 async function init() {
+  // Gate: keep buttons disabled until all data is ready
+  setSightingButtonsEnabled(false);
+
   try {
-    // Fetch all three APIs in parallel
-    const [weatherData, tideData, { tempF: waterTempF, station: tempStation }] = await Promise.all([
+    // Fetch all four data sources in parallel
+    const [weatherData, tideData, { tempF: waterTempF, station: tempStation }, hourlyTidePredictions] = await Promise.all([
       fetchWeather(),
       fetchTides(),
-      fetchWaterTemp()
+      fetchWaterTemp(),
+      fetchHourlyTides()
     ]);
 
-    /* ─── Season ─── */
-    const season = getCurrentSeason();
-    console.log(`[BiscayneFishWatch] Season: ${season.name} (isDry=${season.isDry})`);
+    // Cache for use in sendSighting()
+    _cachedWeather = weatherData;
+    _cachedTideData = tideData;
+    _cachedWaterTemp = waterTempF;
+    _cachedTideTrend = computeTideTrend(hourlyTidePredictions);
+    _cachedMoonPhase = getMoonPhase();
+    _cachedSeason = getCurrentSeason();
+    _dataReady = true;
 
+    const season = _cachedSeason;
+    const moonPhase = _cachedMoonPhase;
+    const tideTrend = _cachedTideTrend;
+    const pressure = weatherData?.main?.pressure ?? null;
+
+    console.log(`[BiscayneFishWatch] Season: ${season.name} (isDry=${season.isDry})`);
+    console.log(`[BiscayneFishWatch] Moon Phase: ${moonPhase} (${getMoonPhaseLabel(moonPhase)})`);
+    console.log(`[BiscayneFishWatch] Tide Trend: ${tideTrend}`);
+    console.log(`[BiscayneFishWatch] Pressure: ${pressure} hPa`);
+
+    /* ─── Season ─── */
     // Season card: informational — always "good" (just a label)
     seasonValue.textContent = season.isDry ? '☀️ Dry' : '🌧️ Wet';
     seasonDetail.textContent = season.isDry
@@ -483,8 +663,8 @@ async function init() {
 
     windValue.textContent = `${windSpeedMph.toFixed(1)} mph`;
     windDetail.textContent = windDir !== null
-      ? `Direction: ${windDir}°${windGust ? ` · Gusts ${windGust.toFixed(1)} mph` : ''}`
-      : 'Direction unavailable';
+      ? `Direction: ${windDir}°${windGust ? ` · Gusts ${windGust.toFixed(1)} mph` : ''}${pressure ? ` · ${pressure} hPa` : ''}`
+      : `Direction unavailable${pressure ? ` · ${pressure} hPa` : ''}`;
     applyStatus(windCard, windDot, windOk ? 'good' : 'poor');
 
     /* ─── Visibility Score (wind-based + seasonal weights) ─── */
@@ -501,6 +681,9 @@ async function init() {
     if (season.isDry) {
       visLabel += ' (+Dry Season clarity)';
     }
+
+    // Moon phase note
+    visLabel += `  ·  ${getMoonPhaseLabel(moonPhase)}`;
 
     visibilityEl.textContent = visLabel;
     visibilityEl.className = `visibility-score ${visClass}`;
@@ -548,6 +731,11 @@ async function init() {
       tideDetText = absDelta < 1
         ? `High tide is now (${fmtTime(nearestHigh.date)})`
         : `${fmtDuration(absDelta)} ${direction} high at ${fmtTime(nearestHigh.date)}`;
+    }
+
+    // Append tide trend
+    if (tideTrend !== 'Unknown') {
+      tideDetText += ` · ${tideTrend === 'Rising' ? '↑' : '↓'} ${tideTrend}`;
     }
 
     tideValue.textContent = tideValText;
@@ -607,6 +795,9 @@ async function init() {
 
     renderCondition(rating, subtitle);
 
+    // All data loaded — enable sighting buttons
+    setSightingButtonsEnabled(true);
+
   } catch (err) {
     console.error('[BiscayneFishWatch] Error loading data:', err);
 
@@ -622,6 +813,14 @@ async function init() {
     if (seasonValue) seasonValue.textContent = '—';
     if (seasonDetail) seasonDetail.textContent = err.message;
     tideTimeline.innerHTML = `<p class="error-msg">${err.message}</p>`;
+
+    // On error, update pill to indicate failure (keep buttons disabled)
+    setSyncState('idle', 'Data load failed');
+    allSightingBtns.forEach(btn => {
+      btn.disabled = true;
+      btn.style.opacity = '0.45';
+      btn.style.cursor = 'not-allowed';
+    });
   }
 }
 
@@ -630,30 +829,29 @@ init();
 
 /* ── Live Report: sighting button logic ─────────────── */
 (function initSightingButtons() {
-  const syncStatus = document.getElementById('sync-status');
-  const syncLabel = document.getElementById('sync-label');
-  const allBtns = document.querySelectorAll('.sighting-btn');
   const LOCK_MS = 5000; // 5 s lock to prevent duplicate entries
 
-  function setSyncState(state, message) {
-    syncStatus.classList.remove('syncing', 'success');
-    if (state !== 'idle') syncStatus.classList.add(state);
-    syncLabel.textContent = message;
-  }
-
-  allBtns.forEach(btn => {
+  allSightingBtns.forEach(btn => {
+    // Store original inner HTML to restore after success
     btn.addEventListener('click', async () => {
       const value = parseInt(btn.dataset.value, 10);
       const labels = { 0: 'No Fish', 1: 'Some Fish', 2: 'Lots of Fish' };
       const label = labels[value] ?? String(value);
 
       // Disable all buttons for LOCK_MS to prevent duplicate entries
-      allBtns.forEach(b => { b.disabled = true; });
-      setSyncState('syncing', 'Sending…');
+      allSightingBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.45'; b.style.cursor = 'not-allowed'; });
+
+      // UI feedback: show "Syncing..." on the clicked button
+      const originalHTML = btn.innerHTML;
+      btn.innerHTML = `<span class="sighting-emoji">⏳</span><span class="sighting-label">Syncing…</span>`;
+      setSyncState('syncing', 'Broadcasting sighting…');
 
       // Fire-and-forget — no-cors hides the server response so we treat
       // any non-throwing dispatch as success.
       await sendSighting(label);
+
+      // UI feedback: show "Success!" on the clicked button
+      btn.innerHTML = `<span class="sighting-emoji">✅</span><span class="sighting-label">Success!</span>`;
 
       // Green pulse: add class to the clicked button for 2 s
       btn.classList.add('btn-broadcast');
@@ -664,8 +862,10 @@ init();
 
       // After LOCK_MS re-enable buttons and reset pill
       setTimeout(() => {
-        allBtns.forEach(b => { b.disabled = false; });
-        setSyncState('idle', 'Ready');
+        // Restore original HTML
+        btn.innerHTML = originalHTML;
+        allSightingBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.cursor = ''; });
+        setSyncState('idle', 'Ready to Log');
       }, LOCK_MS);
     });
   });
