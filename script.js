@@ -572,6 +572,43 @@ async function sendSighting(label) {
   }
 }
 
+/* ── Progress Tracker ─────────────────────────── */
+/**
+ * Fetch the current log row count from the Apps Script backend and update
+ * the Phase-4 progress footer.
+ *
+ * Expects the GET response from APPS_SCRIPT_URL to be JSON with a numeric
+ * `count` field, e.g. { "count": 42 }.  If the fetch fails or the field is
+ * absent the display defaults to "--".
+ *
+ * The progress bar fills proportionally toward PROGRESS_GOAL.
+ */
+const PROGRESS_GOAL = 100;
+
+async function updateProgressCount() {
+  const countEl = document.getElementById('progress-count');
+  const barFill = document.getElementById('progress-bar-fill');
+  if (!countEl || !barFill) return;
+
+  try {
+    const res = await fetch(`${APPS_SCRIPT_URL}?action=count`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const count = typeof data.count === 'number' ? data.count : null;
+
+    if (count === null) throw new Error('No count field in response');
+
+    countEl.textContent = `Logs Collected: ${count} / ${PROGRESS_GOAL}`;
+    const pct = Math.min((count / PROGRESS_GOAL) * 100, 100);
+    barFill.style.width = `${pct}%`;
+    console.log(`[BiscayneFishWatch] Progress: ${count} / ${PROGRESS_GOAL}`);
+  } catch (err) {
+    countEl.textContent = `Logs Collected: -- / ${PROGRESS_GOAL}`;
+    barFill.style.width = '0%';
+    console.warn('[BiscayneFishWatch] updateProgressCount failed:', err.message);
+  }
+}
+
 /* ── Main orchestration ────────────────────────── */
 async function init() {
   // Gate: keep buttons disabled until all data is ready
@@ -798,6 +835,9 @@ async function init() {
     // All data loaded — enable sighting buttons
     setSightingButtonsEnabled(true);
 
+    // Fetch initial log count for the progress footer
+    updateProgressCount();
+
   } catch (err) {
     console.error('[BiscayneFishWatch] Error loading data:', err);
 
@@ -852,6 +892,9 @@ init();
 
       // UI feedback: show "Success!" on the clicked button
       btn.innerHTML = `<span class="sighting-emoji">✅</span><span class="sighting-label">Success!</span>`;
+
+      // Refresh progress count after a successful sighting
+      updateProgressCount();
 
       // Green pulse: add class to the clicked button for 2 s
       btn.classList.add('btn-broadcast');
