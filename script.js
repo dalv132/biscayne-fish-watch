@@ -241,6 +241,7 @@ function setSightingButtonsEnabled(enabled) {
 /* ── Fetch: OpenWeatherMap ─────────────────────── */
 async function fetchWeather() {
   const url = `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&appid=${OPENWEATHER_API_KEY}&units=imperial`;
+  console.log('Current OpenWeather URL:', url.split('appid=')[0] + 'appid=HIDDEN');
   const res = await fetch(url);
   if (!res.ok) throw new Error(`OpenWeatherMap: ${res.status} ${res.statusText}`);
   const data = await res.json();
