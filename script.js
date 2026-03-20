@@ -2,9 +2,10 @@
  * Biscayne Bay Fish Watch — script.js
  *
  * Data sources:
- *   1. OpenWeatherMap "Current Weather" API — wind speed, rain, pressure
- *   2. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina) — hi/lo & hourly
- *   3. NOAA CO-OPS Water Temp    — Station 8723214 (Virginia Key),
+ *   1. OpenWeatherMap "Current Weather" API — wind speed, rain, pressure, clouds
+ *   2. OpenWeatherMap "3-Hour Forecast"     — pressure 3 h ahead (pressure_trend)
+ *   3. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina) — hi/lo & hourly
+ *   4. NOAA CO-OPS Water Temp    — Station 8723214 (Virginia Key),
  *                                   fallback: mi0401 (Dodge Island)
  *
  * Condition logic:
@@ -29,10 +30,14 @@
  *   Bonus range: 74°F – 82°F → OPTIMAL bonus for peak fish activity.
  *   > 88°F → Override status to "Fair - Fish may be deep."
  *
- * Deep Data additions:
- *   Pressure    — main.pressure from OpenWeatherMap (hPa)
- *   Tide Trend  — "Rising" / "Falling" from hourly NOAA predictions
- *   Moon Phase  — 0.0–1.0 via synodic cycle calculation
+ * Environmental Intelligence (Phase 1):
+ *   ghi            — Global Horizontal Irradiance approximation (W/m²)
+ *                    Formula: 1361 * sin(solar_elevation) * (1 − 0.75*(cloud/100)^3.4)
+ *   tidal_momentum — |Δft/hr| rate of tide height change from hourly NOAA data
+ *   pressure_trend — current_hPa − forecast_3h_hPa  (positive = falling barometer)
+ *   crepuscular    — 1 if within 60 mins of sunrise/sunset, else 0
+ *   cloud_cover    — % from weatherData.clouds.all
+ *   activity_score — Biscayne Activity Score 0–100 (see calculateActivityScore)
  */
 
 /* ── Constants ─────────────────────────────────── */
@@ -498,38 +503,352 @@ let _cachedMoonPhase = 0;
 let _cachedSeason = null;
 let _dataReady = false;
 
+// Phase 1 — Environmental Intelligence cache
+let _cachedActivityScore = null;
+let _cachedGhi = null;
+let _cachedTidalMomentum = null;
+let _cachedPressureTrend = null;
+let _cachedCrepuscular = 0;
+let _cachedCloudCover = null;
+
+/* ── Fetch: OWM 3-Hour Forecast (for pressure_trend) ── */
+/**
+ * Fetches the first entry of the OWM 3-hour forecast to compute
+ * pressure_trend = current_pressure − forecast_3h_pressure.
+ * A positive result means the barometer is falling (pre-front signal).
+ * @returns {Promise<number|null>} Forecast pressure in hPa, or null on failure.
+ */
+async function fetchOWMForecast() {
+  const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${LAT}&lon=${LON}&appid=${OPENWEATHER_API_KEY}&units=imperial&cnt=1`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[BiscayneFishWatch] OWM Forecast HTTP ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    console.log('[BiscayneFishWatch] OWM Forecast raw data:', data);
+    const forecastPressure = data?.list?.[0]?.main?.pressure ?? null;
+    return forecastPressure;
+  } catch (e) {
+    console.warn('[BiscayneFishWatch] fetchOWMForecast failed:', e.message);
+    return null;
+  }
+}
+
+/* ── Solar Position ──────────────────────────────── */
+/**
+ * Calculate solar elevation angle in degrees using a simplified astronomical
+ * formula (NOAA/Meeus). Sufficient precision for the GHI approximation.
+ * @param {number} lat  Latitude in decimal degrees
+ * @param {number} lon  Longitude in decimal degrees (negative = West)
+ * @param {number} dateMs  Unix timestamp in milliseconds (UTC)
+ * @returns {number} Solar elevation in degrees [-90, 90]
+ */
+function computeSolarElevation(lat, lon, dateMs) {
+  const D2R = Math.PI / 180;
+  const R2D = 180 / Math.PI;
+
+  // Julian date (days since noon 1 Jan 4713 BC)
+  const JD = dateMs / 86400000 + 2440587.5;
+  // Julian century from J2000.0
+  const T = (JD - 2451545.0) / 36525;
+
+  // Geometric mean longitude of the Sun (degrees)
+  const L0 = (280.46646 + T * (36000.76983 + T * 0.0003032)) % 360;
+  // Mean anomaly of the Sun (degrees)
+  const M = 357.52911 + T * (35999.05029 - 0.0001537 * T);
+  const Mrad = M * D2R;
+
+  // Equation of center
+  const C = Math.sin(Mrad) * (1.914602 - T * (0.004817 + 0.000014 * T))
+           + Math.sin(2 * Mrad) * (0.019993 - 0.000101 * T)
+           + Math.sin(3 * Mrad) * 0.000289;
+
+  // Sun's true longitude
+  const sunLon = L0 + C;
+
+  // Apparent longitude (corrected for aberration)
+  const omega = 125.04 - 1934.136 * T;
+  const lambda = (sunLon - 0.00569 - 0.00478 * Math.sin(omega * D2R));
+
+  // Mean obliquity of the ecliptic
+  const epsilon0 = 23 + (26 + (21.448 - T * (46.8150 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+  const epsilon = epsilon0 + 0.00256 * Math.cos(omega * D2R);
+
+  // Sun's right ascension and declination
+  const sinDec = Math.sin(epsilon * D2R) * Math.sin(lambda * D2R);
+  const declination = Math.asin(sinDec) * R2D;
+
+  // Equation of time (minutes)
+  const y = Math.tan((epsilon / 2) * D2R) ** 2;
+  const sinL0 = Math.sin(2 * L0 * D2R);
+  const cosL0 = Math.cos(2 * L0 * D2R);
+  const sinM2 = Math.sin(2 * Mrad);
+  const eqTime = 4 * R2D * (y * sinL0 - 2 * 0.016708634 * sinM2
+    + 4 * 0.016708634 * y * sinM2 * cosL0
+    - 0.5 * y * y * Math.sin(4 * L0 * D2R)
+    - 1.25 * 0.016708634 * 0.016708634 * Math.sin(2 * Mrad));
+
+  // True solar time (minutes)
+  const utcOffsetMin = new Date(dateMs).getTimezoneOffset();
+  const localTimeMin = (dateMs / 60000) % (24 * 60) - utcOffsetMin;
+  const trueSolarTime = ((localTimeMin + eqTime + 4 * lon) % (24 * 60) + 24 * 60) % (24 * 60);
+
+  // Hour angle
+  const hourAngle = trueSolarTime / 4 < 720
+    ? trueSolarTime / 4 - 180
+    : trueSolarTime / 4 - 540;
+  const haRad = hourAngle * D2R;
+
+  // Solar zenith angle
+  const latRad = lat * D2R;
+  const decRad = declination * D2R;
+  const cosZenith = Math.sin(latRad) * Math.sin(decRad)
+                  + Math.cos(latRad) * Math.cos(decRad) * Math.cos(haRad);
+
+  return Math.asin(Math.max(-1, Math.min(1, cosZenith))) * R2D;
+}
+
+/**
+ * Compute approximate Global Horizontal Irradiance (W/m²) using:
+ *   GHI = 1361 * sin(elevation) * (1 − 0.75*(cloud_cover/100)^3.4)
+ * Returns 0 at night (elevation ≤ 0).
+ * @param {number} solarElevDeg  Solar elevation in degrees
+ * @param {number} cloudCoverPct  Cloud cover 0–100 (%)
+ * @returns {number} GHI in W/m²
+ */
+function computeGHI(solarElevDeg, cloudCoverPct) {
+  if (solarElevDeg <= 0) return 0;
+  const sinElev = Math.sin(solarElevDeg * Math.PI / 180);
+  const cloudFactor = 1 - 0.75 * Math.pow(cloudCoverPct / 100, 3.4);
+  return Math.round(1361 * sinElev * cloudFactor);
+}
+
+/**
+ * Determine if current time is in a crepuscular window (dawn/dusk).
+ * Uses a simplified sunrise/sunset calculation based on the same solar model.
+ * @param {number} lat  Latitude in decimal degrees
+ * @param {number} lon  Longitude in decimal degrees
+ * @param {number} dateMs  Current Unix timestamp in ms
+ * @returns {0|1} 1 if within 60 minutes of sunrise or sunset, else 0
+ */
+function computeCrepuscular(lat, lon, dateMs) {
+  const CREPUSCULAR_MS = 60 * 60 * 1000; // 60 minutes in ms
+  const D2R = Math.PI / 180;
+  const R2D = 180 / Math.PI;
+
+  // Use noon today (local) as a reference for the calculation
+  const localDate = new Date(dateMs);
+  const noonMs = new Date(
+    localDate.getFullYear(), localDate.getMonth(), localDate.getDate(), 12, 0, 0
+  ).getTime();
+
+  // Scan through the day in 2-minute increments to find sunrise/sunset crossings
+  const intervalMs = 2 * 60 * 1000;
+  const dayStart = new Date(localDate.getFullYear(), localDate.getMonth(), localDate.getDate(), 0, 0, 0).getTime();
+  const dayEnd   = dayStart + 24 * 60 * 60 * 1000;
+
+  let sunriseMs = null;
+  let sunsetMs  = null;
+  let prevElevation = computeSolarElevation(lat, lon, dayStart);
+
+  for (let t = dayStart + intervalMs; t <= dayEnd; t += intervalMs) {
+    const elev = computeSolarElevation(lat, lon, t);
+    if (prevElevation <= 0 && elev > 0 && sunriseMs === null) {
+      sunriseMs = t; // crossed horizon upward
+    }
+    if (prevElevation > 0 && elev <= 0 && sunsetMs === null) {
+      sunsetMs = t;  // crossed horizon downward
+    }
+    prevElevation = elev;
+  }
+
+  const now = dateMs;
+  const nearSunrise = sunriseMs !== null && Math.abs(now - sunriseMs) <= CREPUSCULAR_MS;
+  const nearSunset  = sunsetMs  !== null && Math.abs(now - sunsetMs)  <= CREPUSCULAR_MS;
+
+  const result = (nearSunrise || nearSunset) ? 1 : 0;
+  console.log(`[BiscayneFishWatch] Crepuscular: sunrise=${sunriseMs ? new Date(sunriseMs).toLocaleTimeString() : 'N/A'} sunset=${sunsetMs ? new Date(sunsetMs).toLocaleTimeString() : 'N/A'} → crepuscular=${result}`);
+  return result;
+}
+
+/**
+ * Compute tidal momentum — the absolute rate of height change (|ft/hr|) between
+ * the current and previous hourly NOAA prediction entry.
+ * @param {Array<{t: string, v: string}>} hourlyPredictions
+ * @returns {number} Absolute slope in ft/hr (0 if unavailable)
+ */
+function computeTidalMomentum(hourlyPredictions) {
+  if (!hourlyPredictions || hourlyPredictions.length < 2) return 0;
+
+  const nowMs = Date.now();
+  let currentIdx = -1;
+  for (let i = 0; i < hourlyPredictions.length; i++) {
+    if (new Date(hourlyPredictions[i].t).getTime() <= nowMs) currentIdx = i;
+  }
+  if (currentIdx < 1) return 0;
+
+  const curr = parseFloat(hourlyPredictions[currentIdx].v);
+  const prev = parseFloat(hourlyPredictions[currentIdx - 1].v);
+  if (isNaN(curr) || isNaN(prev)) return 0;
+
+  const momentum = Math.abs(curr - prev); // ft/hr (hourly interval)
+  console.log(`[BiscayneFishWatch] Tidal Momentum: ${prev.toFixed(3)} → ${curr.toFixed(3)} ft | Δ=${momentum.toFixed(3)} ft/hr`);
+  return Math.round(momentum * 1000) / 1000;
+}
+
+/* ── Biscayne Activity Score ─────────────────────── */
+/**
+ * Calculate the Biscayne Activity Score (0–100) using weighted environmental factors.
+ *
+ * Weights:
+ *   crepuscular     25%  — Full points at dawn/dusk windows
+ *   tidal_momentum  20%  — Steeper tide curve = more fish movement
+ *   pressure_trend  15%  — Falling barometer (positive delta) = pre-front bonus
+ *   wind_speed      15%  — Optimal 3–8 mph for calm but active surface
+ *   water_temp      10%  — Optimal 74–82°F for peak fish activity
+ *   ghi/cloud_cover  5%  — 20–50% cloud cover = ideal sighting light
+ *   moon+rain       10%  — New/full moon bonus; recent rain penalty
+ *
+ * @param {object} params
+ * @returns {number} Integer score 0–100
+ */
+function calculateActivityScore({
+  crepuscular, tidal_momentum, pressure_trend,
+  wind_speed, water_temp, ghi, cloud_cover,
+  moon_phase, rain_24h
+}) {
+  let score = 0;
+
+  // ── 1. Crepuscular (25%) ──────────────────────────────
+  score += crepuscular === 1 ? 25 : 0;
+
+  // ── 2. Tidal Momentum (20%) ───────────────────────────
+  // Scale linearly over 0–1.5 ft/hr; cap at 1.5.
+  const MAX_MOMENTUM = 1.5;
+  const momentumScore = Math.min(tidal_momentum / MAX_MOMENTUM, 1) * 20;
+  score += momentumScore;
+
+  // ── 3. Pressure Trend (15%) ───────────────────────────
+  // pressure_trend = current − forecast (positive = falling = pre-front bonus)
+  // Clamp to ±5 hPa for scoring purposes.
+  let pressureScore = 0;
+  if (pressure_trend !== null) {
+    if (pressure_trend > 0) {
+      // Falling barometer: bonus scaled 0→15 over 0→5 hPa drop
+      pressureScore = Math.min(pressure_trend / 5, 1) * 15;
+    } else {
+      // Rising barometer: neutral to slight penalty (max −7.5)
+      pressureScore = Math.max(pressure_trend / 5, -1) * 7.5;
+    }
+  }
+  score += pressureScore;
+
+  // ── 4. Wind Speed (15%) ───────────────────────────────
+  // Optimal: 3–8 mph. Linear ramp 0→3 mph and 8→15 mph, then 0 above 15.
+  let windScore = 0;
+  if (wind_speed >= 3 && wind_speed <= 8) {
+    windScore = 15;
+  } else if (wind_speed < 3) {
+    windScore = (wind_speed / 3) * 15;
+  } else if (wind_speed <= 15) {
+    windScore = ((15 - wind_speed) / 7) * 15;
+  } // else 0 above 15 mph
+  score += windScore;
+
+  // ── 5. Water Temperature (10%) ────────────────────────
+  // Optimal: 74–82°F. Linear ramp outside that band.
+  let tempScore = 0;
+  if (water_temp !== null) {
+    if (water_temp >= 74 && water_temp <= 82) {
+      tempScore = 10;
+    } else if (water_temp < 74) {
+      tempScore = Math.max(0, ((water_temp - 60) / 14)) * 10; // ramp 60→74
+    } else {
+      tempScore = Math.max(0, ((95 - water_temp) / 13)) * 10; // ramp 82→95
+    }
+  } else {
+    tempScore = 5; // no data → neutral half-credit
+  }
+  score += tempScore;
+
+  // ── 6. GHI / Cloud Cover (5%) ─────────────────────────
+  // Optimal: 20–50% cloud cover (partial shade = ideal sighting light).
+  // At night (ghi=0) give half credit (conditions neutral for nocturnal fish).
+  let lightScore = 0;
+  if (ghi === 0) {
+    lightScore = 2.5; // nighttime — neutral
+  } else if (cloud_cover !== null) {
+    if (cloud_cover >= 20 && cloud_cover <= 50) {
+      lightScore = 5;
+    } else if (cloud_cover < 20) {
+      // Clear sky — slightly less ideal (glare)
+      lightScore = (cloud_cover / 20) * 5;
+    } else {
+      // Heavy cloud — dims too much
+      lightScore = Math.max(0, ((100 - cloud_cover) / 50)) * 5;
+    }
+  }
+  score += lightScore;
+
+  // ── 7. Moon Phase + Rain 24h (10%) ───────────────────
+  // Moon: bonus for new (0) or full (0.5) — fish more active near tidal extremes.
+  const moonDistFromNew  = Math.min(moon_phase, 1 - moon_phase);       // 0 at new/full
+  const moonDistFromFull = Math.abs(moon_phase - 0.5);                  // 0 at full
+  const moonBonus = Math.max(
+    (1 - moonDistFromNew  / 0.125) * 5,   // peak 5 pts near new moon (±1/8 cycle)
+    (1 - moonDistFromFull / 0.125) * 5,   // peak 5 pts near full moon
+    0
+  );
+
+  // Rain: 24h mm penalty (each mm above 0 reduces score by up to 5 points)
+  const rainPenalty = Math.min(rain_24h / 5, 1) * 5;
+
+  score += moonBonus - rainPenalty;
+
+  // ── Clamp & round ─────────────────────────────────────
+  const finalScore = Math.round(Math.min(Math.max(score, 0), 100));
+  console.log(`[BiscayneFishWatch] Activity Score: ${finalScore}/100 | crep=${crepuscular} momentum=${tidal_momentum.toFixed(2)} pressureDelta=${pressure_trend?.toFixed(1)??'N/A'} wind=${wind_speed.toFixed(1)} temp=${water_temp??'N/A'} cloud=${cloud_cover}% ghi=${ghi} moon=${moon_phase} rain=${rain_24h}mm`);
+  return finalScore;
+}
+
 /* ── Backend: log a sighting ───────────────────── */
 /**
  * Build and POST a sighting record to the Google Apps Script / Sheet backend.
  * Uses cached live data from the last init() run so no extra fetches are needed.
  *
- * Payload fields (Deep Data):
- *   token      — DATABASE_TOKEN for server-side verification
- *   label      — sighting label (e.g. 'No Fish', 'Some Fish', 'Lots of Fish')
- *   timestamp  — ISO-8601 string (local device time)
- *   season     — 'Dry Season' | 'Wet Season'
- *   windSpeed  — mph (number)
- *   windDeg    — degrees (number | null)
- *   pressure   — hPa from OpenWeatherMap main.pressure (number | null)
- *   tideLevel  — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
- *   tideTrend  — 'Rising' | 'Falling' | 'Unknown'
- *   waterTemp  — °F (number | null)
- *   rain24h    — mm rain detected in last 1–3 h window (number)
- *   moonPhase  — 0.0–1.0 synodic phase
+ * Payload fields — 17 keys (snake_case). timestamp is generated server-side.
+ *   token           — DATABASE_TOKEN for server-side verification
+ *   label           — sighting label (e.g. 'No Fish', 'Some Fish', 'Lots of Fish')
+ *   season          — 'Dry Season' | 'Wet Season'
+ *   wind_speed      — mph (number)
+ *   wind_deg        — degrees (number | null)
+ *   pressure        — hPa from OpenWeatherMap main.pressure (number | null)
+ *   tide_level      — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   tide_trend      — 'Rising' | 'Falling' | 'Unknown'
+ *   water_temp      — °F (number | null)
+ *   rain_24h        — mm rain in last 1–3 h window (number)
+ *   moon_phase      — 0.0–1.0 synodic phase
+ *   ghi             — W/m² (number)
+ *   tidal_momentum  — ft/hr absolute slope (number)
+ *   pressure_trend  — hPa delta: current − 3h forecast (positive = falling)
+ *   crepuscular     — 0 | 1
+ *   cloud_cover     — % (number | null)
+ *   activity_score  — Biscayne Activity Score 0–100
  *
  * @param {string} label  A short description of the sighting.
  * @returns {Promise<{ok: boolean, result?: any, error?: string}>}
  */
 async function sendSighting(label) {
   try {
-    // Use cached data if available; otherwise re-fetch
     const weatherData = _cachedWeather;
     const tideData = _cachedTideData;
     const waterTempF = _cachedWaterTemp;
 
     // Wind
-    const windSpeed = weatherData?.wind?.speed ?? 0;   // mph (imperial)
-    const windDeg = weatherData?.wind?.deg ?? null;
+    const wind_speed = weatherData?.wind?.speed ?? 0;   // mph (imperial)
+    const wind_deg = weatherData?.wind?.deg ?? null;
 
     // Pressure (hPa)
     const pressure = weatherData?.main?.pressure ?? null;
@@ -537,28 +856,33 @@ async function sendSighting(label) {
     // Rain (last 1–3 h window)
     const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain24h = rainMm1h > 0 ? rainMm1h : rainMm3h;
+    const rain_24h = rainMm1h > 0 ? rainMm1h : rainMm3h;
 
     // Tide
     const predictions = tideData?.predictions ?? [];
     const { inWindow } = evaluateTideWindow(predictions);
-    const tideLevel = predictions.length === 0
+    const tide_level = predictions.length === 0
       ? 'NO_DATA'
       : inWindow ? 'IN_WINDOW' : 'OUTSIDE_WINDOW';
 
     const payload = {
-      token: DATABASE_TOKEN,
-      label: String(label),
-      timestamp: new Date().toISOString(),
-      season: _cachedSeason?.name ?? 'Unknown',
-      windSpeed,
-      windDeg,
+      token:          DATABASE_TOKEN,
+      label:          String(label),
+      season:         _cachedSeason?.name ?? 'Unknown',
+      wind_speed,
+      wind_deg,
       pressure,
-      tideLevel,
-      tideTrend: _cachedTideTrend,
-      waterTemp: waterTempF,
-      rain24h,
-      moonPhase: _cachedMoonPhase
+      tide_level,
+      tide_trend:     _cachedTideTrend,
+      water_temp:     waterTempF,
+      rain_24h,
+      moon_phase:     _cachedMoonPhase,
+      ghi:            _cachedGhi,
+      tidal_momentum: _cachedTidalMomentum,
+      pressure_trend: _cachedPressureTrend,
+      crepuscular:    _cachedCrepuscular,
+      cloud_cover:    _cachedCloudCover,
+      activity_score: _cachedActivityScore
     };
 
     console.log('[Biscayne-Watch] Data Packet Sent:', payload);
@@ -626,21 +950,72 @@ async function init() {
   console.log('System Check - Key Status:', OPENWEATHER_API_KEY.startsWith('__') ? 'Placeholder (NOT injected — will 401)' : 'Injected ✅');
 
   try {
-    // Fetch all four data sources in parallel
-    const [weatherData, tideData, { tempF: waterTempF, station: tempStation }, hourlyTidePredictions] = await Promise.all([
+    // Fetch all five data sources in parallel (forecast added for pressure_trend)
+    const [
+      weatherData,
+      tideData,
+      { tempF: waterTempF, station: tempStation },
+      hourlyTidePredictions,
+      forecastPressure
+    ] = await Promise.all([
       fetchWeather(),
       fetchTides(),
       fetchWaterTemp(),
-      fetchHourlyTides()
+      fetchHourlyTides(),
+      fetchOWMForecast()
     ]);
 
-    // Cache for use in sendSighting()
-    _cachedWeather = weatherData;
-    _cachedTideData = tideData;
-    _cachedWaterTemp = waterTempF;
-    _cachedTideTrend = computeTideTrend(hourlyTidePredictions);
-    _cachedMoonPhase = getMoonPhase();
-    _cachedSeason = getCurrentSeason();
+    // ── Compute Environmental Intelligence fields ──────────────────────
+    const nowMs = Date.now();
+    const cloudCoverPct = weatherData?.clouds?.all ?? null;
+    const currentPressure = weatherData?.main?.pressure ?? null;
+
+    // GHI approximation
+    const solarElevDeg = computeSolarElevation(LAT, LON, nowMs);
+    const ghi = computeGHI(solarElevDeg, cloudCoverPct ?? 0);
+
+    // Tidal momentum (|ft/hr| slope)
+    const tidalMomentum = computeTidalMomentum(hourlyTidePredictions);
+
+    // Pressure trend: current − forecast (positive = falling barometer)
+    const pressureTrend = (currentPressure !== null && forecastPressure !== null)
+      ? Math.round((currentPressure - forecastPressure) * 100) / 100
+      : null;
+
+    // Crepuscular: 1 if within 60 mins of sunrise/sunset
+    const crepuscular = computeCrepuscular(LAT, LON, nowMs);
+
+    // Rain (EI block — prefixed to avoid collision with rain card block below)
+    const eiRainMm1h = weatherData?.rain?.['1h'] ?? 0;
+    const eiRainMm3h = weatherData?.rain?.['3h'] ?? 0;
+    const rain24hMm = eiRainMm1h > 0 ? eiRainMm1h : eiRainMm3h;
+
+    // Biscayne Activity Score
+    const activityScore = calculateActivityScore({
+      crepuscular,
+      tidal_momentum: tidalMomentum,
+      pressure_trend: pressureTrend,
+      wind_speed:     weatherData?.wind?.speed ?? 0,
+      water_temp:     waterTempF,
+      ghi,
+      cloud_cover:    cloudCoverPct,
+      moon_phase:     getMoonPhase(),
+      rain_24h:       rain24hMm
+    });
+
+    // Cache all values for use in sendSighting()
+    _cachedWeather        = weatherData;
+    _cachedTideData       = tideData;
+    _cachedWaterTemp      = waterTempF;
+    _cachedTideTrend      = computeTideTrend(hourlyTidePredictions);
+    _cachedMoonPhase      = getMoonPhase();
+    _cachedSeason         = getCurrentSeason();
+    _cachedGhi            = ghi;
+    _cachedTidalMomentum  = tidalMomentum;
+    _cachedPressureTrend  = pressureTrend;
+    _cachedCrepuscular    = crepuscular;
+    _cachedCloudCover     = cloudCoverPct;
+    _cachedActivityScore  = activityScore;
     _dataReady = true;
 
     const season = _cachedSeason;
