@@ -580,7 +580,7 @@ function computeSolarElevation(lat, lon, dateMs) {
   const sinDec = Math.sin(epsilon * D2R) * Math.sin(lambda * D2R);
   const declination = Math.asin(sinDec) * R2D;
 
-  // Equation of time (minutes)
+  // Equation of time (minutes) — computed in UTC to avoid timezone drift
   const y = Math.tan((epsilon / 2) * D2R) ** 2;
   const sinL0 = Math.sin(2 * L0 * D2R);
   const cosL0 = Math.cos(2 * L0 * D2R);
@@ -590,18 +590,17 @@ function computeSolarElevation(lat, lon, dateMs) {
     - 0.5 * y * y * Math.sin(4 * L0 * D2R)
     - 1.25 * 0.016708634 * 0.016708634 * Math.sin(2 * Mrad));
 
-  // True solar time (minutes)
-  const utcOffsetMin = new Date(dateMs).getTimezoneOffset();
-  const localTimeMin = (dateMs / 60000) % (24 * 60) - utcOffsetMin;
-  const trueSolarTime = ((localTimeMin + eqTime + 4 * lon) % (24 * 60) + 24 * 60) % (24 * 60);
+  // True solar time — use UTC minutes directly + longitude correction.
+  // This avoids getTimezoneOffset() which varies by browser/OS and causes
+  // Miami Timezone Drift in the solar hour angle calculation.
+  const utcMinutes = (dateMs / 60000) % (24 * 60); // UTC minutes into the day
+  const trueSolarTime = ((utcMinutes + eqTime + 4 * lon) % (24 * 60) + 24 * 60) % (24 * 60);
 
-  // Hour angle
-  const hourAngle = trueSolarTime / 4 < 720
-    ? trueSolarTime / 4 - 180
-    : trueSolarTime / 4 - 540;
+  // Hour angle (degrees): 0 at solar noon, negative AM, positive PM
+  const hourAngle = trueSolarTime / 4 - 180;
   const haRad = hourAngle * D2R;
 
-  // Solar zenith angle
+  // Solar elevation (90° − zenith angle)
   const latRad = lat * D2R;
   const decRad = declination * D2R;
   const cosZenith = Math.sin(latRad) * Math.sin(decRad)
@@ -627,49 +626,21 @@ function computeGHI(solarElevDeg, cloudCoverPct) {
 
 /**
  * Determine if current time is in a crepuscular window (dawn/dusk).
- * Uses a simplified sunrise/sunset calculation based on the same solar model.
- * @param {number} lat  Latitude in decimal degrees
- * @param {number} lon  Longitude in decimal degrees
+ *
+ * Uses a direct solar elevation range check instead of a scanning loop:
+ *   -6° to 12° corresponds to civil twilight + the ~60-minute window
+ *   around the horizon crossing — timezone-independent and O(1).
+ *
+ * @param {number} lat     Latitude in decimal degrees
+ * @param {number} lon     Longitude in decimal degrees
  * @param {number} dateMs  Current Unix timestamp in ms
- * @returns {0|1} 1 if within 60 minutes of sunrise or sunset, else 0
+ * @param {number} solarElevDeg  Pre-computed solar elevation (degrees)
+ * @returns {0|1} 1 if sun is between -6° and 12° elevation, else 0
  */
-function computeCrepuscular(lat, lon, dateMs) {
-  const CREPUSCULAR_MS = 60 * 60 * 1000; // 60 minutes in ms
-  const D2R = Math.PI / 180;
-  const R2D = 180 / Math.PI;
-
-  // Use noon today (local) as a reference for the calculation
-  const localDate = new Date(dateMs);
-  const noonMs = new Date(
-    localDate.getFullYear(), localDate.getMonth(), localDate.getDate(), 12, 0, 0
-  ).getTime();
-
-  // Scan through the day in 2-minute increments to find sunrise/sunset crossings
-  const intervalMs = 2 * 60 * 1000;
-  const dayStart = new Date(localDate.getFullYear(), localDate.getMonth(), localDate.getDate(), 0, 0, 0).getTime();
-  const dayEnd   = dayStart + 24 * 60 * 60 * 1000;
-
-  let sunriseMs = null;
-  let sunsetMs  = null;
-  let prevElevation = computeSolarElevation(lat, lon, dayStart);
-
-  for (let t = dayStart + intervalMs; t <= dayEnd; t += intervalMs) {
-    const elev = computeSolarElevation(lat, lon, t);
-    if (prevElevation <= 0 && elev > 0 && sunriseMs === null) {
-      sunriseMs = t; // crossed horizon upward
-    }
-    if (prevElevation > 0 && elev <= 0 && sunsetMs === null) {
-      sunsetMs = t;  // crossed horizon downward
-    }
-    prevElevation = elev;
-  }
-
-  const now = dateMs;
-  const nearSunrise = sunriseMs !== null && Math.abs(now - sunriseMs) <= CREPUSCULAR_MS;
-  const nearSunset  = sunsetMs  !== null && Math.abs(now - sunsetMs)  <= CREPUSCULAR_MS;
-
-  const result = (nearSunrise || nearSunset) ? 1 : 0;
-  console.log(`[BiscayneFishWatch] Crepuscular: sunrise=${sunriseMs ? new Date(sunriseMs).toLocaleTimeString() : 'N/A'} sunset=${sunsetMs ? new Date(sunsetMs).toLocaleTimeString() : 'N/A'} → crepuscular=${result}`);
+function computeCrepuscular(lat, lon, dateMs, solarElevDeg) {
+  // Crepuscular band: -6° (civil twilight) to +12° (~60 min after sunrise / before sunset)
+  const result = (solarElevDeg >= -6.0 && solarElevDeg <= 12.0) ? 1 : 0;
+  console.log(`[BiscayneFishWatch] Crepuscular: solarElev=${solarElevDeg.toFixed(2)}° → crepuscular=${result}`);
   return result;
 }
 
@@ -856,7 +827,7 @@ async function sendSighting(label) {
     // Rain (last 1–3 h window)
     const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain_24h = rainMm1h > 0 ? rainMm1h : rainMm3h;
+    const rain_24h = Math.max(rainMm1h, rainMm3h); // max-volume: capture peak intensity
 
     // Tide
     const predictions = tideData?.predictions ?? [];
@@ -983,7 +954,7 @@ async function init() {
       : null;
 
     // Crepuscular: 1 if within 60 mins of sunrise/sunset
-    const crepuscular = computeCrepuscular(LAT, LON, nowMs);
+    const crepuscular = computeCrepuscular(LAT, LON, nowMs, solarElevDeg);
 
     // Rain (EI block — prefixed to avoid collision with rain card block below)
     const eiRainMm1h = weatherData?.rain?.['1h'] ?? 0;
@@ -1027,6 +998,11 @@ async function init() {
     console.log(`[BiscayneFishWatch] Moon Phase: ${moonPhase} (${getMoonPhaseLabel(moonPhase)})`);
     console.log(`[BiscayneFishWatch] Tide Trend: ${tideTrend}`);
     console.log(`[BiscayneFishWatch] Pressure: ${pressure} hPa`);
+    console.log(`[BiscayneFishWatch] ── EI Debug ──────────────────────────────────────────`);
+    console.log(`[BiscayneFishWatch]   Solar Elevation : ${solarElevDeg.toFixed(2)}°`);
+    console.log(`[BiscayneFishWatch]   Rain Volume     : ${rain24hMm.toFixed(2)} mm (max of 1h/3h)`);
+    console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
+    console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────`);
 
     /* ─── Season ─── */
     // Season card: informational — always "good" (just a label)
