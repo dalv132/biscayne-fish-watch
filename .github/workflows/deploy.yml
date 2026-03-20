@@ -42,10 +42,23 @@ jobs:
           OWM_KEY:   ${{ secrets.OPENWEATHER_API_KEY }}
           DB_TOKEN:  ${{ secrets.DATABASE_TOKEN }}
         run: |
+          # ── Guard: fail fast if any secret is missing ────────────────────────
+          if [ -z "${OWM_KEY}" ];   then echo "❌ OPENWEATHER_API_KEY secret is empty or missing!"; exit 1; fi
+          if [ -z "${APPS_URL}" ];  then echo "❌ APPS_SCRIPT_URL secret is empty or missing!"; exit 1; fi
+          if [ -z "${DB_TOKEN}" ];  then echo "❌ DATABASE_TOKEN secret is empty or missing!"; exit 1; fi
+          echo "✅ All secrets are present."
+
+          # ── Substitute placeholders ──────────────────────────────────────────
           sed -i "s|__APPS_SCRIPT_URL__|${APPS_URL}|g"      script.js
           sed -i "s|__OPENWEATHER_API_KEY__|${OWM_KEY}|g"   script.js
           sed -i "s|__DATABASE_TOKEN__|${DB_TOKEN}|g"        script.js
-          echo "✅ Secret placeholders substituted."
+
+          # ── Post-check: verify placeholder is gone ───────────────────────────
+          if grep -q "__OPENWEATHER_API_KEY__" script.js; then
+            echo "❌ Placeholder __OPENWEATHER_API_KEY__ still present after substitution!"; exit 1
+          fi
+          echo "✅ Secret placeholders substituted successfully."
+
 
       # 3. Configure the GitHub Pages environment.
       - name: Setup Pages
