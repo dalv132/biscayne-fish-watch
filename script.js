@@ -547,6 +547,7 @@ let _cachedTidalMomentum = null;
 let _cachedPressureTrend = null;
 let _cachedCrepuscular = 0;
 let _cachedCloudCover = null;
+let _cachedSolarElevDeg = 0;  // degrees — used by Viewing Window popup
 
 /* ── Fetch: OWM 3-Hour Forecast (for pressure_trend) ── */
 /**
@@ -868,6 +869,13 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
     const rain_24h = Math.max(rainMm1h, rainMm3h);
 
+    // Rain-Cloud Guard: if rain > 0 but cloud API reports 0%, force 90%
+    // to avoid logging an "Impossible Row" (rain with clear sky).
+    const rawCloudCover = weatherData?.clouds?.all ?? null;
+    const cloud_cover_guarded = (rain_24h > 0 && (rawCloudCover ?? 0) === 0)
+      ? 90
+      : (rawCloudCover ?? _cachedCloudCover ?? 0);
+
     // Tide
     const predictions = tideData?.predictions ?? [];
     const { inWindow } = evaluateTideWindow(predictions);
@@ -894,7 +902,7 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
       tidal_momentum:   _cachedTidalMomentum,    // O
       pressure_trend:   _cachedPressureTrend,    // P
       crepuscular:      _cachedCrepuscular,      // Q
-      cloud_cover:      _cachedCloudCover,       // R
+      cloud_cover:      cloud_cover_guarded,     // R — guarded value (90% if raining with 0% API)
       activity_score:   _cachedActivityScore     // S
     };
 
@@ -979,12 +987,25 @@ async function init() {
 
     // ── Compute Environmental Intelligence fields ──────────────────────
     const nowMs = Date.now();
-    const cloudCoverPct = weatherData?.clouds?.all ?? null;
+    const cloudCoverPct = weatherData?.clouds?.all ?? null;   // raw API value
     const currentPressure = weatherData?.main?.pressure ?? null;
 
-    // GHI approximation
+    // Rain (EI block — prefixed to avoid collision with rain card block below)
+    const eiRainMm1h = weatherData?.rain?.['1h'] ?? 0;
+    const eiRainMm3h = weatherData?.rain?.['3h'] ?? 0;
+    const rain24hMm = eiRainMm1h > 0 ? eiRainMm1h : eiRainMm3h;
+
+    // ── Rain-Cloud Guard ──────────────────────────────────────────────
+    // Prevents the "Impossible Row": if rain > 0 but API reports 0% clouds,
+    // force cloud cover to 90% for GHI and Activity Score calculations.
+    const cloudCoverAdjusted = (rain24hMm > 0 && (cloudCoverPct ?? 0) === 0)
+      ? 90
+      : (cloudCoverPct ?? 0);
+    const cloudGuardTriggered = cloudCoverAdjusted !== (cloudCoverPct ?? 0);
+
+    // GHI approximation (uses adjusted cloud cover; returns 0 at night)
     const solarElevDeg = computeSolarElevation(LAT, LON, nowMs);
-    const ghi = computeGHI(solarElevDeg, cloudCoverPct ?? 0);
+    const ghi = computeGHI(solarElevDeg, cloudCoverAdjusted);
 
     // Tidal momentum (|ft/hr| slope)
     const tidalMomentum = computeTidalMomentum(hourlyTidePredictions);
@@ -997,12 +1018,7 @@ async function init() {
     // Crepuscular: 1 if within 60 mins of sunrise/sunset
     const crepuscular = computeCrepuscular(LAT, LON, nowMs, solarElevDeg);
 
-    // Rain (EI block — prefixed to avoid collision with rain card block below)
-    const eiRainMm1h = weatherData?.rain?.['1h'] ?? 0;
-    const eiRainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain24hMm = eiRainMm1h > 0 ? eiRainMm1h : eiRainMm3h;
-
-    // Biscayne Activity Score
+    // Biscayne Activity Score (uses guarded cloud cover)
     const activityScore = calculateActivityScore({
       crepuscular,
       tidal_momentum: tidalMomentum,
@@ -1010,7 +1026,7 @@ async function init() {
       wind_speed:     weatherData?.wind?.speed ?? 0,
       water_temp:     waterTempF,
       ghi,
-      cloud_cover:    cloudCoverPct,
+      cloud_cover:    cloudCoverAdjusted,
       moon_phase:     getMoonPhase(),
       rain_24h:       rain24hMm
     });
@@ -1026,8 +1042,9 @@ async function init() {
     _cachedTidalMomentum  = tidalMomentum;
     _cachedPressureTrend  = pressureTrend;
     _cachedCrepuscular    = crepuscular;
-    _cachedCloudCover     = cloudCoverPct;
+    _cachedCloudCover     = cloudCoverAdjusted;  // store the guarded value
     _cachedActivityScore  = activityScore;
+    _cachedSolarElevDeg   = solarElevDeg;        // store for Viewing Window popup
     _dataReady = true;
 
     const season = _cachedSeason;
@@ -1044,6 +1061,42 @@ async function init() {
     console.log(`[BiscayneFishWatch]   Rain Volume     : ${rain24hMm.toFixed(2)} mm (max of 1h/3h)`);
     console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
     console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────`);
+
+    // ── 🌞 Solar & Cloud Verification Table ───────────────────────────
+    // High-visibility debug table: verify solar elevation, cloud cover, and GHI
+    // at a glance. Open browser DevTools → Console to see this.
+    const localTime = new Date(nowMs).toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+      timeZone: 'America/New_York'
+    });
+    console.log('%c🌞 BiscayneFishWatch — Solar & Cloud Debug', 'font-size:14px;font-weight:bold;color:#ff9900');
+    console.table([
+      {
+        'Field':                  'Local Time (Miami)',
+        'Value':                  localTime,
+        'Note':                   'America/New_York'
+      },
+      {
+        'Field':                  'Solar Elevation (°)',
+        'Value':                  solarElevDeg.toFixed(2),
+        'Note':                   solarElevDeg < 0 ? '🌙 Night — GHI forced 0' : solarElevDeg < 15 ? '🌅 Low sun (dawn/dusk)' : '☀️ Daytime'
+      },
+      {
+        'Field':                  'Cloud Cover API (%)',
+        'Value':                  cloudCoverPct ?? 'null',
+        'Note':                   'Raw OpenWeatherMap value'
+      },
+      {
+        'Field':                  'Cloud Cover Adjusted (%)',
+        'Value':                  cloudCoverAdjusted,
+        'Note':                   cloudGuardTriggered ? '⚠️ Rain-Cloud Guard TRIGGERED (forced 90%)' : '✅ Matches API'
+      },
+      {
+        'Field':                  'GHI (W/m²)',
+        'Value':                  ghi,
+        'Note':                   ghi === 0 ? (solarElevDeg <= 0 ? '🌙 Night' : '☁️ Overcast') : `~${ghi} W/m² (max ~1361)`
+      }
+    ]);
 
     /* ─── Hero Card: Viewing Window ─── */
     const viewingWindow = getViewingWindow(solarElevDeg);
@@ -1288,10 +1341,10 @@ init();
       title: 'Viewing Window',
       icon: '🌅',
       liveData() {
-        const e = _cachedActivityScore !== null ? _cachedActivityScore : '–';
-        const vw = getViewingWindow(typeof _cachedCrepuscular === 'number' ? _cachedCrepuscular : 0);
-        // Use solarElevDeg from a best-guess — we cache nothing directly; show label + note
-        return `Status: ${vw.label}\nActivity Score: ${e}/100`;
+        const score = _cachedActivityScore !== null ? _cachedActivityScore : '–';
+        const elev  = _cachedSolarElevDeg;          // real solar elevation in degrees
+        const vw    = getViewingWindow(elev);
+        return `Status: ${vw.label}\nSolar Elevation: ${elev.toFixed(1)}°\nActivity Score: ${score}/100`;
       },
       importance: 'Solar angle dictates how deep light penetrates the water and how visible fish are near the surface. Low-angle dawn and dusk light creates a "magic window" where fish are most active and easiest to spot from above.',
       interpretation: '🌙 Night → poor visibility. 🌅 Dawn/Dusk (−6° to 2°) → high activity, low light. ⭐ PEAK (2°–15°) → best sighting conditions. ☀️ Good (15°–35°) → fine visibility. 🥵 Midday above 35° → surface glare reduces sighting success.',
