@@ -98,7 +98,20 @@ function getMoonPhase() {
   const SYNODIC_PERIOD_MS = 29.530588853 * 24 * 3600 * 1000;  // 29.53 days in ms
   const elapsed = Date.now() - KNOWN_NEW_MOON_MS;
   const phase = ((elapsed % SYNODIC_PERIOD_MS) / SYNODIC_PERIOD_MS + 1) % 1;
-  return Math.round(phase * 1000) / 1000; // 3 decimal places
+  return Math.round(phase * 1000) / 1000; // 3 decimal places — 0 = new, 0.5 = full, 1 ≈ new
+}
+
+/**
+ * Return lunar illumination fraction: 0.0 = New Moon, 1.0 = Full Moon.
+ * Uses the synodic phase from getMoonPhase() mapped onto a 0→1→0 triangle
+ * so the value represents how "lit" the moon is at any point in the cycle.
+ * @returns {number} 0.000 – 1.000
+ */
+function getMoonIllumination() {
+  const phase = getMoonPhase(); // 0 = new, 0.5 = full, 1 ≈ new
+  // Triangle wave: peaks at 1.0 when phase = 0.5 (full moon)
+  const illumination = 1 - Math.abs(phase - 0.5) * 2;
+  return Math.round(illumination * 1000) / 1000;
 }
 
 /**
@@ -608,6 +621,10 @@ let _cachedPredictedTideHeight = null;  // ft (from hourly predictions)
 let _cachedActualTideHeight = null;     // ft (from NOAA observed water_level)
 let _cachedTideSurge = null;            // ft (actual − predicted)
 
+// Group 3 — Sun, Light & Physics raw metrics (not yet in UI or payload)
+let _cachedViewingPotential = 0;   // 0–100 continuous (replaces binary crepuscular)
+let _cachedMoonIllumination = 0;   // 0.0 = New Moon, 1.0 = Full Moon
+
 /* ── Fetch: OWM 3-Hour Forecast (pressure_trend + cloud cover) ── */
 /**
  * Fetches the first entry of the OWM 3-hour forecast.
@@ -730,22 +747,52 @@ function computeGHI(solarElevDeg, cloudCoverPct) {
 
 /**
  * Determine if current time is in a crepuscular window (dawn/dusk).
- *
- * Uses a direct solar elevation range check instead of a scanning loop:
- *   -6° to 12° corresponds to civil twilight + the ~60-minute window
- *   around the horizon crossing — timezone-independent and O(1).
- *
- * @param {number} lat     Latitude in decimal degrees
- * @param {number} lon     Longitude in decimal degrees
- * @param {number} dateMs  Current Unix timestamp in ms
+ * Kept for backward-compatibility with the Google Sheet payload (column Q).
+ * For internal analytics use computeViewingPotential() instead.
  * @param {number} solarElevDeg  Pre-computed solar elevation (degrees)
  * @returns {0|1} 1 if sun is between -6° and 12° elevation, else 0
  */
 function computeCrepuscular(lat, lon, dateMs, solarElevDeg) {
-  // Crepuscular band: -6° (civil twilight) to +12° (~60 min after sunrise / before sunset)
   const result = (solarElevDeg >= -6.0 && solarElevDeg <= 12.0) ? 1 : 0;
   console.log(`[BiscayneFishWatch] Crepuscular: solarElev=${solarElevDeg.toFixed(2)}° → crepuscular=${result}`);
   return result;
+}
+
+/**
+ * Continuous Viewing Potential score (0–100) based on solar elevation.
+ *
+ * Replaces the binary crepuscular flag with a smooth, physics-grounded curve:
+ *
+ *   Elevation          Score   Rationale
+ *   ──────────────     ─────   ──────────────────────────────────────────────
+ *   < −6°              0       Night — no usable light
+ *   −6° → +2°     0 → 100     Dawn/dusk ramp (civil twilight to first light)
+ *   +2° → +15°        100     PEAK window — low angle, no glare, fish active
+ *   +15° → +35°   100 → 70    Good — adequate light, mild glare increase
+ *   +35° → +90°    70 → 30    Midday — increasing surface glare, fish deep
+ *
+ * Linear interpolation is used at every transition so the score never jumps.
+ *
+ * @param {number} solarElevDeg  Solar elevation in degrees [-90, 90]
+ * @returns {number} Integer 0–100
+ */
+function computeViewingPotential(solarElevDeg) {
+  // Helper: linear interpolation
+  const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
+
+  let score;
+  if (solarElevDeg < -6) {
+    score = 0;                                           // Night
+  } else if (solarElevDeg < 2) {
+    score = lerp(0, 100, (solarElevDeg + 6) / 8);       // Dawn/dusk ramp
+  } else if (solarElevDeg <= 15) {
+    score = 100;                                         // PEAK window
+  } else if (solarElevDeg <= 35) {
+    score = lerp(100, 70, (solarElevDeg - 15) / 20);    // Good → mild glare
+  } else {
+    score = lerp(70, 30, (solarElevDeg - 35) / 55);     // Midday glare ramp
+  }
+  return Math.round(score);
 }
 
 /**
@@ -1118,6 +1165,13 @@ async function init() {
       rain_24h:        rain24hMm
     });
 
+    // ── Group 3: Sun, Light & Physics raw metrics ──────────────────────
+    // viewingPotential: continuous 0–100 score (smooth solar elevation curve).
+    // moonIllumination: 0.0 at New Moon → 1.0 at Full Moon.
+    // Neither is wired to the UI or payload yet — internal state only.
+    const viewingPotential  = computeViewingPotential(solarElevDeg);
+    const moonIllumination  = getMoonIllumination();
+
     // Cache all values for use in sendSighting()
     _cachedWeather             = weatherData;
     _cachedTideData            = tideData;
@@ -1135,6 +1189,8 @@ async function init() {
     _cachedPredictedTideHeight = predictedTideHeight;
     _cachedActualTideHeight    = actualTideHeight;
     _cachedTideSurge           = tideSurge;
+    _cachedViewingPotential    = viewingPotential;
+    _cachedMoonIllumination    = moonIllumination;
     _dataReady = true;
 
     const season = _cachedSeason;
@@ -1151,6 +1207,16 @@ async function init() {
     console.log(`[BiscayneFishWatch]   Rain Volume     : ${rain24hMm.toFixed(2)} mm (max of 1h/3h)`);
     console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
     console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────────`);
+
+    // ── Group 3 Verification ───────────────────────────────────────────────
+    // Prints all four calibration metrics in one line for rapid browser verification.
+    // Expected at 3 PM Miami time (~19:00 UTC, April): Solar ≈ 50°–60°
+    console.log(
+      `%c[Group 3 Calibration] Solar: ${solarElevDeg.toFixed(1)}° | ` +
+      `GHI: ${ghi} W/m² | ViewScore: ${viewingPotential}/100 | ` +
+      `Moon Illumination: ${moonIllumination.toFixed(3)}`,
+      'font-weight:bold;color:#00e0a0;font-size:12px'
+    );
 
     // ── 🌞 Solar & Cloud Verification Table ───────────────────────────
     // High-visibility debug table. Open DevTools → Console to verify.
