@@ -366,6 +366,60 @@ async function fetchHourlyTides() {
   }
 }
 
+/* ── Fetch: NOAA Observed Water Level ────────────────── */
+/**
+ * Fetches the latest observed (actual) water level from NOAA CO-OPS
+ * Station 8723165 (Miamarina), datum MLLW, english units.
+ *
+ * Returns the most recent reading so we can compute tide_surge:
+ *   tide_surge = actual_water_level − predicted_tide_height
+ *   Positive = "Surge"   (more water than predicted)
+ *   Negative = "Blowout" (less water than predicted)
+ *
+ * @returns {Promise<number|null>} Latest observed water level in feet, or null on failure.
+ */
+async function fetchObservedWaterLevel() {
+  const date = todayNoaaDate();
+  const url = [
+    'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter',
+    `?product=water_level`,
+    `&application=biscayne_fish_watch`,
+    `&begin_date=${date}`,
+    `&end_date=${date}`,
+    `&datum=MLLW`,
+    `&station=${NOAA_TIDE_STATION}`,
+    `&time_zone=lst_ldt`,
+    `&units=english`,
+    `&format=json`
+  ].join('');
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[BiscayneFishWatch] NOAA Observed Water Level HTTP ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    if (data.error) {
+      console.warn('[BiscayneFishWatch] NOAA Observed Water Level error:', data.error.message);
+      return null;
+    }
+    const readings = data.data ?? [];
+    if (readings.length === 0) {
+      console.warn('[BiscayneFishWatch] NOAA Observed Water Level: no readings returned');
+      return null;
+    }
+    // Use the most recent reading (last entry in the array)
+    const latest = parseFloat(readings[readings.length - 1].v);
+    if (isNaN(latest)) return null;
+    console.log(`[BiscayneFishWatch] Observed Water Level: ${latest.toFixed(2)} ft (MLLW)`);
+    return latest;
+  } catch (e) {
+    console.warn('[BiscayneFishWatch] fetchObservedWaterLevel failed:', e.message);
+    return null;
+  }
+}
+
 /* ── Tide Trend calculation ────────────────────── */
 /**
  * Derive tide trend by comparing current hour vs. prior hour in hourly predictions.
@@ -548,6 +602,11 @@ let _cachedPressureTrend = null;
 let _cachedCrepuscular = 0;
 let _cachedCloudCover = null;
 let _cachedSolarElevDeg = 0;  // degrees — used by Viewing Window popup
+
+// Tidal Reality cache
+let _cachedPredictedTideHeight = null;  // ft (from hourly predictions)
+let _cachedActualTideHeight = null;     // ft (from NOAA observed water_level)
+let _cachedTideSurge = null;            // ft (actual − predicted)
 
 /* ── Fetch: OWM 3-Hour Forecast (pressure_trend + cloud cover) ── */
 /**
@@ -834,26 +893,29 @@ function calculateActivityScore({
  * Build and POST a sighting record to the Google Apps Script / Sheet backend.
  * Uses cached live data from the last init() run so no extra fetches are needed.
  *
- * Payload fields — 19 keys (snake_case, columns A–S). timestamp generated server-side.
- *   A  token           — DATABASE_TOKEN
- *   B  water_clarity   — 'Poor' | 'Fair' | 'Great'
- *   C  fish_activity   — 'None' | 'Some' | 'Lots'
- *   D  special_sightings — comma-separated string (e.g. 'Dolphin, Turtle') or ''
- *   E  season          — 'Dry Season' | 'Wet Season'
- *   F  wind_speed      — mph
- *   G  wind_deg        — degrees | null
- *   H  pressure        — hPa | null
- *   I  tide_level      — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
- *   J  tide_trend      — 'Rising' | 'Falling' | 'Unknown'
- *   K  water_temp      — °F | null
- *   L  rain_24h        — mm
- *   M  moon_phase      — 0.0–1.0
- *   N  ghi             — W/m²
- *   O  tidal_momentum  — ft/hr
- *   P  pressure_trend  — hPa delta (positive = falling)
- *   Q  crepuscular     — 0 | 1
- *   R  cloud_cover     — %
- *   S  activity_score  — 0–100
+ * Payload fields — 23 keys (snake_case, columns A–W). timestamp generated server-side.
+ *   A  token                  — DATABASE_TOKEN
+ *   B  water_clarity          — 'Poor' | 'Fair' | 'Great'
+ *   C  fish_activity          — 'None' | 'Some' | 'Lots'
+ *   D  special_sightings      — comma-separated string or ''
+ *   E  season                 — 'Dry Season' | 'Wet Season'
+ *   F  wind_speed             — mph
+ *   G  wind_deg               — degrees | null
+ *   H  pressure               — hPa | null
+ *   I  tide_level             — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   J  tide_trend             — 'Rising' | 'Falling' | 'Unknown'
+ *   K  water_temp             — °F | null
+ *   L  rain_24h               — mm
+ *   M  moon_phase             — 0.0–1.0
+ *   N  ghi                    — W/m²
+ *   O  tidal_momentum         — ft/hr
+ *   P  pressure_trend         — hPa delta (positive = falling)
+ *   Q  crepuscular            — 0 | 1
+ *   R  cloud_cover            — %
+ *   S  activity_score         — 0–100
+ *   T  predicted_tide_height  — ft (MLLW, from hourly predictions)
+ *   U  actual_tide_height     — ft (MLLW, from NOAA observed water_level)
+ *   V  tide_surge             — ft (actual − predicted; + = Surge, − = Blowout)
  *
  * @param {object} userInputs  { water_clarity, fish_activity, special_sightings }
  * @returns {Promise<{ok: boolean, error?: string}>}
@@ -883,30 +945,33 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
       ? 'NO_DATA'
       : inWindow ? 'IN_WINDOW' : 'OUTSIDE_WINDOW';
 
-    // 19-column payload matching Apps Script columns A–S
+    // 23-column payload matching Apps Script columns A–V
     const payload = {
-      token:            DATABASE_TOKEN,          // A
-      water_clarity:    String(water_clarity),   // B
-      fish_activity:    String(fish_activity),   // C
-      special_sightings: String(special_sightings), // D
-      season:           _cachedSeason?.name ?? 'Unknown', // E
-      wind_speed,                                // F
-      wind_deg,                                  // G
-      pressure,                                  // H
-      tide_level,                                // I
-      tide_trend:       _cachedTideTrend,        // J
-      water_temp:       waterTempF,              // K
-      rain_24h,                                  // L
-      moon_phase:       _cachedMoonPhase,        // M
-      ghi:              _cachedGhi,              // N
-      tidal_momentum:   _cachedTidalMomentum,    // O
-      pressure_trend:   _cachedPressureTrend,    // P
-      crepuscular:      _cachedCrepuscular,      // Q
-      cloud_cover:      _cachedCloudCover,       // R — forecast cloud cover (current fallback)
-      activity_score:   _cachedActivityScore     // S
+      token:                 DATABASE_TOKEN,              // A
+      water_clarity:         String(water_clarity),       // B
+      fish_activity:         String(fish_activity),       // C
+      special_sightings:     String(special_sightings),   // D
+      season:                _cachedSeason?.name ?? 'Unknown', // E
+      wind_speed,                                         // F
+      wind_deg,                                           // G
+      pressure,                                           // H
+      tide_level,                                         // I
+      tide_trend:            _cachedTideTrend,            // J
+      water_temp:            waterTempF,                  // K
+      rain_24h,                                           // L
+      moon_phase:            _cachedMoonPhase,            // M
+      ghi:                   _cachedGhi,                  // N
+      tidal_momentum:        _cachedTidalMomentum,        // O
+      pressure_trend:        _cachedPressureTrend,        // P
+      crepuscular:           _cachedCrepuscular,          // Q
+      cloud_cover:           _cachedCloudCover,           // R
+      activity_score:        _cachedActivityScore,        // S
+      predicted_tide_height: _cachedPredictedTideHeight,  // T
+      actual_tide_height:    _cachedActualTideHeight,     // U
+      tide_surge:            _cachedTideSurge             // V
     };
 
-    console.log('[Biscayne-Watch] Data Packet Sent (19 cols):', payload);
+    console.log('[Biscayne-Watch] Data Packet Sent (23 cols):', payload);
 
     // Google Apps Script (no-cors): body must be plain JSON string sent as text/plain
     // to avoid a CORS preflight. The response is opaque — non-throwing = success.
@@ -970,28 +1035,28 @@ async function init() {
   console.log('System Check - Key Status:', OPENWEATHER_API_KEY.startsWith('__') ? 'Placeholder (NOT injected — will 401)' : 'Injected ✅');
 
   try {
-    // Fetch all five data sources in parallel
+    // Fetch all six data sources in parallel
     const [
       weatherData,
       tideData,
       { tempF: waterTempF, station: tempStation },
       hourlyTidePredictions,
-      { forecastPressure, forecastCloudCover }
+      { forecastPressure, forecastCloudCover },
+      observedWaterLevel
     ] = await Promise.all([
       fetchWeather(),
       fetchTides(),
       fetchWaterTemp(),
       fetchHourlyTides(),
-      fetchOWMForecast()
+      fetchOWMForecast(),
+      fetchObservedWaterLevel()
     ]);
 
     // ── Compute Environmental Intelligence fields ──────────────────────
     const nowMs = Date.now();
     const currentPressure = weatherData?.main?.pressure ?? null;
 
-    // Cloud cover: prefer the 3-hour forecast reading (more reliable during
-    // rain events when the current-weather sensor may be obstructed);
-    // fall back to current weather clouds.all if forecast is unavailable.
+    // Cloud cover: prefer the 3-hour forecast reading
     const cloudCoverPct = forecastCloudCover ?? weatherData?.clouds?.all ?? 0;
 
     // Rain (EI block)
@@ -1016,33 +1081,60 @@ async function init() {
     // Crepuscular: 1 if within 60 mins of sunrise/sunset
     const crepuscular = computeCrepuscular(LAT, LON, nowMs, solarElevDeg);
 
+    // ── Tidal Reality: predicted height + surge ──────────────────────
+    // Predicted height: the current hour's entry from hourly predictions.
+    let predictedTideHeight = null;
+    if (hourlyTidePredictions.length > 0) {
+      let currentIdx = -1;
+      for (let i = 0; i < hourlyTidePredictions.length; i++) {
+        if (new Date(hourlyTidePredictions[i].t).getTime() <= nowMs) currentIdx = i;
+      }
+      if (currentIdx >= 0) {
+        const val = parseFloat(hourlyTidePredictions[currentIdx].v);
+        if (!isNaN(val)) predictedTideHeight = Math.round(val * 100) / 100;
+      }
+    }
+    // Actual (observed) height from NOAA water_level product
+    const actualTideHeight = observedWaterLevel !== null
+      ? Math.round(observedWaterLevel * 100) / 100
+      : null;
+    // Surge = actual − predicted (+ve = Surge, −ve = Blowout)
+    const tideSurge = (actualTideHeight !== null && predictedTideHeight !== null)
+      ? Math.round((actualTideHeight - predictedTideHeight) * 100) / 100
+      : null;
+
+    console.log(`[BiscayneFishWatch] Tide Reality — Predicted: ${predictedTideHeight ?? 'N/A'} ft | Actual: ${actualTideHeight ?? 'N/A'} ft | Surge: ${tideSurge ?? 'N/A'} ft`);
+
     // Biscayne Activity Score
     const activityScore = calculateActivityScore({
       crepuscular,
-      tidal_momentum: tidalMomentum,
-      pressure_trend: pressureTrend,
-      wind_speed:     weatherData?.wind?.speed ?? 0,
-      water_temp:     waterTempF,
+      tidal_momentum:  tidalMomentum,
+      pressure_trend:  pressureTrend,
+      wind_speed:      weatherData?.wind?.speed ?? 0,
+      water_temp:      waterTempF,
       ghi,
-      cloud_cover:    cloudCoverPct,
-      moon_phase:     getMoonPhase(),
-      rain_24h:       rain24hMm
+      cloud_cover:     cloudCoverPct,
+      moon_phase:      getMoonPhase(),
+      rain_24h:        rain24hMm
     });
 
     // Cache all values for use in sendSighting()
-    _cachedWeather        = weatherData;
-    _cachedTideData       = tideData;
-    _cachedWaterTemp      = waterTempF;
-    _cachedTideTrend      = computeTideTrend(hourlyTidePredictions);
-    _cachedMoonPhase      = getMoonPhase();
-    _cachedSeason         = getCurrentSeason();
-    _cachedGhi            = ghi;
-    _cachedTidalMomentum  = tidalMomentum;
-    _cachedPressureTrend  = pressureTrend;
-    _cachedCrepuscular    = crepuscular;
-    _cachedCloudCover     = cloudCoverPct;  // forecast cloud cover (or current fallback)
-    _cachedActivityScore  = activityScore;
-    _cachedSolarElevDeg   = solarElevDeg;        // store for Viewing Window popup
+    _cachedWeather             = weatherData;
+    _cachedTideData            = tideData;
+    _cachedWaterTemp           = waterTempF;
+    _cachedTideTrend           = computeTideTrend(hourlyTidePredictions);
+    _cachedMoonPhase           = getMoonPhase();
+    _cachedSeason              = getCurrentSeason();
+    _cachedGhi                 = ghi;
+    _cachedTidalMomentum       = tidalMomentum;
+    _cachedPressureTrend       = pressureTrend;
+    _cachedCrepuscular         = crepuscular;
+    _cachedCloudCover          = cloudCoverPct;
+    _cachedActivityScore       = activityScore;
+    _cachedSolarElevDeg        = solarElevDeg;
+    _cachedPredictedTideHeight = predictedTideHeight;
+    _cachedActualTideHeight    = actualTideHeight;
+    _cachedTideSurge           = tideSurge;
     _dataReady = true;
 
     const season = _cachedSeason;
@@ -1102,6 +1194,28 @@ async function init() {
     /* ─── Hero Card: Tidal Flow ─── */
     const tidalFlowHero = getTidalFlowLabel(tidalMomentum);
     if (hcTideIcon && hcTideDot) applyHeroStatus(hcTideIcon, hcTideDot, tidalFlowHero.status);
+
+    // Tide surge sub-label: "1.8ft | +0.2ft Surge" — shown under the card name
+    const tideLabelEl = document.getElementById('hc-tide-label');
+    const tideAlertEl = document.getElementById('hc-tide-alert');
+    if (tideLabelEl) {
+      if (actualTideHeight !== null) {
+        const surgeStr = tideSurge !== null
+          ? ` | ${tideSurge >= 0 ? '+' : ''}${tideSurge.toFixed(2)}ft ${tideSurge >= 0 ? 'Surge' : 'Blowout'}`
+          : '';
+        tideLabelEl.textContent = `${actualTideHeight.toFixed(2)}ft${surgeStr}`;
+      } else {
+        tideLabelEl.textContent = '';
+      }
+    }
+    // Alert icon: non-standard water level (|surge| > 0.5 ft)
+    if (tideAlertEl) {
+      const surgeSignificant = tideSurge !== null && Math.abs(tideSurge) > 0.5;
+      tideAlertEl.hidden = !surgeSignificant;
+      tideAlertEl.title  = surgeSignificant
+        ? `⚠️ ${tideSurge > 0 ? 'Surge' : 'Blowout'}: water level ${Math.abs(tideSurge).toFixed(2)}ft ${tideSurge > 0 ? 'above' : 'below'} predicted`
+        : '';
+    }
 
     /* ─── Hero Card: Barometer ─── */
     const baroHero = getBarometerStatus(pressureTrend);

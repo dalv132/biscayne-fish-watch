@@ -366,6 +366,32 @@ main {
 
 .hero-card:hover .hc-name { color: var(--white); }
 
+/* Tide surge sub-label (e.g. "1.8ft | +0.2ft Surge") */
+.hc-tide-label {
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--teal);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  min-height: 0.9rem;
+}
+
+/* Alert icon shown when |surge| > 0.5 ft */
+.hc-tide-alert {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  animation: surge-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes surge-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
 /* Tiny status dot top-right */
 .hc-status-dot {
   position: absolute;
