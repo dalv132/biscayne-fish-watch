@@ -940,29 +940,30 @@ function calculateActivityScore({
  * Build and POST a sighting record to the Google Apps Script / Sheet backend.
  * Uses cached live data from the last init() run so no extra fetches are needed.
  *
- * Payload fields — 23 keys (snake_case, columns A–V). timestamp generated server-side.
+ * Payload fields — 23 keys (snake_case, columns A–W). timestamp generated server-side.
  *   A  token              — DATABASE_TOKEN
- *   B  water_clarity      — 'Poor' | 'Fair' | 'Great'
- *   C  fish_activity      — 'None' | 'Some' | 'Lots'
- *   D  special_sightings  — comma-separated string or ''
- *   E  season             — 'Dry Season' | 'Wet Season'
- *   F  wind_speed         — mph
- *   G  wind_direction     — degrees (0–360) | null
- *   H  pressure           — hPa | null
- *   I  tide_level         — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
- *   J  tide_trend         — 'Rising' | 'Falling' | 'Unknown'
- *   K  water_temp         — °F | null
- *   L  rain_24h           — mm (Math.max of 1h and 3h buckets)
- *   M  moon_phase         — 0.0–1.0 (synodic cycle; 0 = new, 0.5 = full)
- *   N  ghi                — W/m² (forecast cloud cover + UTC solar elevation)
- *   O  tidal_momentum     — ft/hr (|curr − prev| hourly NOAA prediction)
- *   P  pressure_trend     — hPa delta (current − forecast; positive = falling)
- *   Q  viewing_potential  — 0–100 continuous score (solar elevation curve)
- *   R  cloud_cover        — % (OWM 3-hr forecast; fallback to current weather)
+ *   B  season             — 'Dry Season' | 'Wet Season'
+ *   C  wind_speed         — mph (2dp)
+ *   D  wind_direction     — degrees 0–360 | null
+ *   E  pressure           — hPa | null
+ *   F  tide_level         — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   G  tide_trend         — 'Rising' | 'Falling' | 'Unknown'
+ *   H  water_temp         — °F (2dp) | null
+ *   I  rain_24h           — mm (2dp, Math.max of 1h and 3h buckets)
+ *   J  moon_phase         — 0.0–1.0 (synodic; 0 = new, 0.5 = full)
+ *   K  fish_activity      — 'None' | 'Some' | 'Lots'
+ *   L  water_clarity      — 'Poor' | 'Fair' | 'Great'
+ *   M  special_sightings  — comma-separated string or ''
+ *   N  ghi                — W/m² (forecast cloud + UTC solar elevation)
+ *   O  cloud_cover        — % (OWM 3-hr forecast; fallback current weather)
+ *   P  viewing_potential  — 0–100 continuous score (solar elevation curve)
+ *   Q  tidal_momentum     — ft/hr (2dp, |curr − prev| hourly NOAA prediction)
+ *   R  pressure_trend     — hPa delta (2dp, current − forecast; + = falling)
  *   S  activity_score     — 0–100 weighted environmental score
- *   T  predicted_height   — ft MLLW (current-hour NOAA hourly prediction, 2dp)
- *   U  actual_height      — ft MLLW (latest NOAA observed water_level, 2dp)
- *   V  tide_surge         — ft (actual − predicted; + = Surge, − = Blowout, 2dp)
+ *   T  solar_elevation    — degrees (2dp, UTC-based NOAA/Meeus formula)
+ *   U  predicted_height   — ft MLLW (2dp, current-hour NOAA hourly prediction)
+ *   V  actual_height      — ft MLLW (2dp, latest NOAA observed water_level)
+ *   W  tide_surge         — ft (2dp, actual − predicted; + = Surge, − = Blowout)
  *
  * @param {object} userInputs  { water_clarity, fish_activity, special_sightings }
  * @returns {Promise<{ok: boolean, error?: string}>}
@@ -973,17 +974,22 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
     const tideData    = _cachedTideData;
     const waterTempF  = _cachedWaterTemp;
 
+    // Helper: round to 2 decimal places (null/NaN-safe)
+    const r2 = v => (v !== null && v !== undefined && !isNaN(v))
+      ? Math.round(v * 100) / 100
+      : null;
+
     // Wind
-    const wind_speed     = weatherData?.wind?.speed ?? 0;
-    const wind_direction = weatherData?.wind?.deg   ?? null;  // renamed from wind_deg
+    const wind_speed     = r2(weatherData?.wind?.speed ?? 0);
+    const wind_direction = weatherData?.wind?.deg ?? null;  // integer degrees
 
     // Pressure (hPa)
-    const pressure = weatherData?.main?.pressure ?? null;
+    const pressure = weatherData?.main?.pressure ?? null;   // integer hPa from OWM
 
     // Rain: peak volume of the current rain event (1h or 3h bucket)
     const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain_24h = Math.max(rainMm1h, rainMm3h);
+    const rain_24h = r2(Math.max(rainMm1h, rainMm3h));
 
     // Tide window status
     const predictions = tideData?.predictions ?? [];
@@ -998,34 +1004,35 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
       return { ok: false, error: 'Group 3 (solar/light) data not yet computed.' };
     }
 
-    // 23-column payload matching Apps Script columns A–V
+    // 23-column payload — columns A–W matching Google Apps Script schema
     const payload = {
-      token:             DATABASE_TOKEN,                           // A
-      water_clarity:     String(water_clarity),                    // B
-      fish_activity:     String(fish_activity),                    // C
-      special_sightings: String(special_sightings),                // D
-      season:            _cachedSeason?.name ?? 'Unknown',         // E
-      wind_speed,                                                   // F
-      wind_direction,                                               // G  (was wind_deg)
-      pressure,                                                     // H
-      tide_level,                                                   // I
-      tide_trend:        _cachedTideTrend,                         // J
-      water_temp:        waterTempF,                               // K
-      rain_24h,                                                     // L  (Math.max 1h/3h)
-      moon_phase:        _cachedMoonPhase,                         // M
-      ghi:               _cachedGhi,                               // N
-      tidal_momentum:    _cachedTidalMomentum,                     // O
-      pressure_trend:    _cachedPressureTrend,                     // P
-      viewing_potential: _cachedViewingPotential,                  // Q  (0–100, was crepuscular 0/1)
-      cloud_cover:       _cachedCloudCover,                        // R  (OWM forecast-sourced)
-      activity_score:    _cachedActivityScore,                     // S
-      predicted_height:  _cachedPredictedTideHeight,               // T  (was predicted_tide_height)
-      actual_height:     _cachedActualTideHeight,                  // U  (was actual_tide_height)
-      tide_surge:        _cachedTideSurge                          // V
+      token:             DATABASE_TOKEN,                    // A
+      season:            _cachedSeason?.name ?? 'Unknown', // B
+      wind_speed,                                           // C  (2dp)
+      wind_direction,                                       // D
+      pressure,                                             // E
+      tide_level,                                           // F
+      tide_trend:        _cachedTideTrend,                 // G
+      water_temp:        r2(waterTempF),                   // H  (2dp)
+      rain_24h,                                             // I  (2dp, Math.max 1h/3h)
+      moon_phase:        _cachedMoonPhase,                 // J
+      fish_activity:     String(fish_activity),            // K
+      water_clarity:     String(water_clarity),            // L
+      special_sightings: String(special_sightings),        // M
+      ghi:               _cachedGhi,                       // N  (integer W/m²)
+      cloud_cover:       _cachedCloudCover,                // O  (OWM forecast-sourced %)
+      viewing_potential: _cachedViewingPotential,          // P  (0–100 integer)
+      tidal_momentum:    r2(_cachedTidalMomentum),         // Q  (2dp ft/hr)
+      pressure_trend:    r2(_cachedPressureTrend),         // R  (2dp hPa delta)
+      activity_score:    _cachedActivityScore,             // S  (0–100 integer)
+      solar_elevation:   r2(_cachedSolarElevDeg),          // T  (2dp degrees) ← NEW
+      predicted_height:  _cachedPredictedTideHeight,       // U  (already 2dp)
+      actual_height:     _cachedActualTideHeight,          // V  (already 2dp)
+      tide_surge:        _cachedTideSurge                  // W  (already 2dp)
     };
 
-    // Pre-flight log — verify all 23 columns in DevTools before the POST fires
-    console.log('Payload Prepared:', payload);
+    // Pre-flight diagnostic — verify all 23 columns in DevTools before POST fires
+    console.log('23-Column Payload Ready:', payload);
 
     // Google Apps Script (no-cors): body must be plain JSON string sent as text/plain
     // to avoid a CORS preflight. The response is opaque — non-throwing = success.
