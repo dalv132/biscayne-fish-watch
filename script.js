@@ -193,33 +193,19 @@ const condSub = document.getElementById('condition-subtitle');
 const lastUpdated = document.getElementById('last-updated');
 const visibilityEl = document.getElementById('visibility-score');
 
-const windValue = document.getElementById('wind-value');
-const windDetail = document.getElementById('wind-detail');
-const windDot = document.getElementById('wind-status-dot');
-const windCard = document.getElementById('wind-card');
+/* ── Hero card DOM refs ───────────────────────── */
+const hcViewingIcon = document.getElementById('hc-viewing-icon');
+const hcViewingDot  = document.getElementById('hc-viewing-dot');
+const hcTideIcon    = document.getElementById('hc-tide-icon');
+const hcTideDot     = document.getElementById('hc-tide-dot');
+const hcBaroIcon    = document.getElementById('hc-baro-icon');
+const hcBaroDot     = document.getElementById('hc-baro-dot');
+const hcTempIcon    = document.getElementById('hc-temp-icon');
+const hcTempDot     = document.getElementById('hc-temp-dot');
+const hcClarityIcon = document.getElementById('hc-clarity-icon');
+const hcClarityDot  = document.getElementById('hc-clarity-dot');
 
-const tideValue = document.getElementById('tide-value');
-const tideDetail = document.getElementById('tide-detail');
-const tideDot = document.getElementById('tide-status-dot');
-const tideCard = document.getElementById('tide-card');
-
-const rainValue = document.getElementById('rain-value');
-const rainDetail = document.getElementById('rain-detail');
-const rainDot = document.getElementById('rain-status-dot');
-const rainCard = document.getElementById('rain-card');
-
-// New: Season & Water Temp cards
-const seasonValue = document.getElementById('season-value');
-const seasonDetail = document.getElementById('season-detail');
-const seasonDot = document.getElementById('season-status-dot');
-const seasonCard = document.getElementById('season-card');
-
-const tempValue = document.getElementById('temp-value');
-const tempDetail = document.getElementById('temp-detail');
-const tempDot = document.getElementById('temp-status-dot');
-const tempCard = document.getElementById('temp-card');
-
-const tideTimeline = document.getElementById('tide-timeline');
+const tideTimeline  = document.getElementById('tide-timeline');
 
 /* ── Sighting / Modal refs ─────────────────────── */
 const logBtn     = document.getElementById('btn-log-sighting');
@@ -235,15 +221,14 @@ const syncLabel  = document.getElementById('sync-label');
 /* ── UI helpers ────────────────────────────────── */
 
 /**
- * Apply a traffic-light class to a card and dot.
+ * Apply a traffic-light class to a hero card icon + dot.
+ * @param {HTMLElement} icon  .hc-icon element
+ * @param {HTMLElement} dot   .hc-status-dot element
  * @param {'good'|'fair'|'poor'} status
  */
-function applyStatus(card, dot, status) {
-  ['good', 'fair', 'poor'].forEach(s => {
-    card.classList.remove(s);
-    dot.classList.remove(s);
-  });
-  card.classList.add(status);
+function applyHeroStatus(icon, dot, status) {
+  ['good', 'fair', 'poor'].forEach(s => { icon.classList.remove(s); dot.classList.remove(s); });
+  icon.classList.add(status);
   dot.classList.add(status);
 }
 
@@ -1060,68 +1045,62 @@ async function init() {
     console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
     console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────`);
 
-    /* ─── Season / Viewing Window ─── */
+    /* ─── Hero Card: Viewing Window ─── */
     const viewingWindow = getViewingWindow(solarElevDeg);
-    seasonValue.textContent = viewingWindow.label;
-    seasonValue.className = 'metric-value label-mode';
-    seasonDetail.textContent = `${season.isDry ? '☀️ Dry Season' : '🌧️ Wet Season'} · Solar ${solarElevDeg.toFixed(1)}°`;
-    applyStatus(seasonCard, seasonDot, viewingWindow.status);
+    if (hcViewingIcon && hcViewingDot) applyHeroStatus(hcViewingIcon, hcViewingDot, viewingWindow.status);
 
-    /* ─── Water Temperature ─── */
-    let tempOk = true;   // true = within ideal range
-    let heatStress = false;  // > 88°F override
-    let tempLabel, tempDetailText, tempCardStatus;
+    /* ─── Hero Card: Tidal Flow ─── */
+    const tidalFlowHero = getTidalFlowLabel(tidalMomentum);
+    if (hcTideIcon && hcTideDot) applyHeroStatus(hcTideIcon, hcTideDot, tidalFlowHero.status);
+
+    /* ─── Hero Card: Barometer ─── */
+    const baroHero = getBarometerStatus(pressureTrend);
+    if (hcBaroIcon && hcBaroDot) applyHeroStatus(hcBaroIcon, hcBaroDot, baroHero.status);
+
+    /* ─── Hero Card: Water Temp ─── */
+    const tempHeroStatus = waterTempF === null ? 'fair'
+      : waterTempF >= 74 && waterTempF <= 82 ? 'good'
+      : waterTempF >= 65 && waterTempF <= 88 ? 'fair'
+      : 'poor';
+    if (hcTempIcon && hcTempDot) applyHeroStatus(hcTempIcon, hcTempDot, tempHeroStatus);
+
+    /* ─── Hero Card: Surface Clarity (wind-based) ─── */
+    const windSpeedMph = weatherData.wind?.speed ?? 0;
+    const clarityStatus = windSpeedMph < 5 ? 'good' : windSpeedMph <= 10 ? 'fair' : 'poor';
+    if (hcClarityIcon && hcClarityDot) applyHeroStatus(hcClarityIcon, hcClarityDot, clarityStatus);
+
+    /* internal wind sub-vars used by visibilityEl and overall score */
+    const windDir  = weatherData.wind?.deg ?? null;
+    const windGust = weatherData.wind?.gust ?? null;
+    const windOk   = windSpeedMph < WIND_THRESHOLD_MPH;
+
+    /* ─── Water Temperature (internal only — hero card drives display) ─── */
+    let tempOk = true;
+    let heatStress = false;
 
     if (waterTempF === null) {
-      tempLabel = 'N/A';
-      tempDetailText = 'No data from Virginia Key or Dodge Island sensors';
-      tempCardStatus = 'fair';
       tempOk = false;
     } else if (waterTempF > WATER_TEMP_HEAT_STRESS) {
       heatStress = true;
       tempOk = false;
-      tempLabel = `${waterTempF.toFixed(1)}°F`;
-      tempDetailText = `⚠️ Heat stress > ${WATER_TEMP_HEAT_STRESS}°F — fish likely deep`;
-      tempCardStatus = 'poor';
-    } else if (waterTempF >= WATER_TEMP_IDEAL_MIN && waterTempF <= WATER_TEMP_IDEAL_MAX) {
-      tempLabel = `${waterTempF.toFixed(1)}°F`;
-      tempDetailText = `Ideal range ${WATER_TEMP_IDEAL_MIN}–${WATER_TEMP_IDEAL_MAX}°F — peak fish activity`;
-      tempCardStatus = 'good';
-    } else {
-      // Outside ideal but not heat stress
+    } else if (waterTempF < WATER_TEMP_IDEAL_MIN || waterTempF > WATER_TEMP_IDEAL_MAX) {
       tempOk = false;
-      tempLabel = `${waterTempF.toFixed(1)}°F`;
-      tempDetailText = waterTempF < WATER_TEMP_IDEAL_MIN
-        ? `Cool — below ideal ${WATER_TEMP_IDEAL_MIN}°F min`
-        : `Warm — above ideal ${WATER_TEMP_IDEAL_MAX}°F max`;
-      tempCardStatus = 'fair';
     }
-
-    // Append sensor source to detail text
-    const stationLabel = tempStation === '8723214' ? 'Virginia Key' : tempStation === 'mi0401' ? 'Dodge Island' : tempStation;
-    if (waterTempF !== null && stationLabel) {
-      tempDetailText += ` · ${stationLabel} sensor`;
-    }
-
-    tempValue.textContent = tempLabel;
-    tempDetail.textContent = tempDetailText;
-    applyStatus(tempCard, tempDot, tempCardStatus);
 
     console.log(`[BiscayneFishWatch] Water Temp: ${waterTempF}°F from ${tempStation} | ok=${tempOk} | heatStress=${heatStress}`);
 
-    /* ─── Weather: wind ─── */
-    const windSpeedMph = weatherData.wind?.speed ?? 0;
-    const windDir = weatherData.wind?.deg ?? null;
-    const windGust = weatherData.wind?.gust ?? null;
-    const windOk = windSpeedMph < WIND_THRESHOLD_MPH;
-    const baroStatus = getBarometerStatus(pressureTrend);
+    /* ─── Rain (internal only — no card DOM to update) ─── */
+    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
+    const rainMm3h = weatherData.rain?.['3h'] ?? 0;
+    const rainIn2h = rainMm1h > 0 || rainMm3h > 0;
+    let rainOk = !rainIn2h;
+    let wetSeasonPenalty = false;
+    if (!season.isDry && rainIn2h) {
+      const rainIn3h = mmToIn(rainMm3h > 0 ? rainMm3h : rainMm1h);
+      if (rainIn3h > WET_SEASON_RAIN_PENALTY_IN) { wetSeasonPenalty = true; rainOk = false; }
+    }
 
-    windValue.textContent = baroStatus.label;
-    windValue.className = 'metric-value label-mode';
-    windDetail.textContent = `${windSpeedMph.toFixed(1)} mph${windOk ? ' ✓' : ' ⚠'}${windDir !== null ? ` · ${windDir}°` : ''}${windGust ? ` · Gusts ${windGust.toFixed(1)} mph` : ''}${pressure ? ` · ${pressure} hPa` : ''}`;
-    applyStatus(windCard, windDot, baroStatus.status);
-
-    /* ─── Visibility Score (wind-based + seasonal weights) ─── */
+    /* ─── Visibility score (still drives the visibilityEl banner) ─── */
     let visLabel, visClass;
     if (windSpeedMph < VIS_EXCELLENT_MPH) {
       visLabel = '👁 Visibility: Excellent'; visClass = 'vis-excellent';
@@ -1130,72 +1109,14 @@ async function init() {
     } else {
       visLabel = '👁 Visibility: Low'; visClass = 'vis-low';
     }
-
-    // Dry season: note bonus clarity
-    if (season.isDry) {
-      visLabel += ' (+Dry Season clarity)';
-    }
-
-    // Moon phase note
+    if (season.isDry) visLabel += ' (+Dry Season clarity)';
     visLabel += `  ·  ${getMoonPhaseLabel(moonPhase)}`;
-
     visibilityEl.textContent = visLabel;
     visibilityEl.className = `visibility-score ${visClass}`;
 
-    /* ─── Weather: rain (2-hour window + 24h conversion for penalty) ─── */
-    const rainMm1h = weatherData.rain?.['1h'] ?? 0;
-    const rainMm3h = weatherData.rain?.['3h'] ?? 0;
-    const rainIn2h = rainMm1h > 0 || rainMm3h > 0;
-    let rainOk = !rainIn2h;
-    const displayRain = rainMm1h > 0 ? rainMm1h : rainMm3h;
-
-    // Wet-season penalty: if precip exceeds 0.5 in in last 24h equivalent
-    // OWM's "3h" field is the closest proxy for a short accumulation window.
-    // We apply the penalty when in wet season AND rain is detected.
-    let wetSeasonPenalty = false;
-    if (!season.isDry && rainIn2h) {
-      const rainIn3h = mmToIn(rainMm3h > 0 ? rainMm3h : rainMm1h);
-      // Scale to estimate 24-h: if 3h reading already exceeds threshold, flag it
-      if (rainIn3h > WET_SEASON_RAIN_PENALTY_IN) {
-        wetSeasonPenalty = true;
-        rainOk = false; // explicit penalty
-      }
-    }
-
-    rainValue.textContent = rainIn2h ? `${displayRain.toFixed(1)} mm` : 'None';
-    rainDetail.textContent = rainOk
-      ? 'No precipitation in the last 2 hours'
-      : wetSeasonPenalty
-        ? `🌧 Wet Season runoff risk — ${displayRain.toFixed(1)} mm detected`
-        : `Rain detected — ${displayRain.toFixed(1)} mm (last 1–3 hrs)`;
-    applyStatus(rainCard, rainDot, rainOk ? 'good' : displayRain < 1 ? 'fair' : 'poor');
-
-    /* ─── Tides ─── */
+    /* ─── Tides (internal variables for overall score) ─── */
     const predictions = tideData.predictions ?? [];
     const { inWindow, nearestHigh, deltaMinutes } = evaluateTideWindow(predictions);
-    const tidalFlowStatus = getTidalFlowLabel(tidalMomentum);
-
-    let tideDetText;
-    if (!nearestHigh) {
-      tideDetText = 'No high tide data today';
-    } else {
-      const absDelta = Math.abs(deltaMinutes);
-      const direction = deltaMinutes > 0 ? 'after' : 'before';
-      const windowText = inWindow ? 'In window ✓' : 'Outside window';
-      tideDetText = absDelta < 1
-        ? `High tide now · ${windowText}`
-        : `${fmtDuration(absDelta)} ${direction} high · ${windowText}`;
-    }
-
-    // Append tide trend
-    if (tideTrend !== 'Unknown') {
-      tideDetText += ` · ${tideTrend === 'Rising' ? '↑' : '↓'} ${tideTrend}`;
-    }
-
-    tideValue.textContent = tidalFlowStatus.label;
-    tideValue.className = 'metric-value label-mode';
-    tideDetail.textContent = tideDetText;
-    applyStatus(tideCard, tideDot, tidalFlowStatus.status);
 
     renderTideTimeline(predictions, nearestHigh);
 
@@ -1344,4 +1265,120 @@ init();
       setTimeout(() => setSyncState('idle', 'Ready to Log'), 4000);
     });
   }
+})();
+
+/* ── Info Popup ─────────────────────────────────────────────────── */
+(function initInfoPopup() {
+  const overlay    = document.getElementById('info-popup-overlay');
+  const closeBtn   = document.getElementById('info-popup-close');
+  const popupIcon  = document.getElementById('popup-icon');
+  const popupTitle = document.getElementById('popup-title');
+  const popupLive  = document.getElementById('popup-live');
+  const popupImp   = document.getElementById('popup-importance');
+  const popupInter = document.getElementById('popup-interpretation');
+
+  if (!overlay) return;
+
+  /**
+   * Card definitions. `liveData` is a function so it always reads the latest
+   * cached values when the user taps a card.
+   */
+  const CARDS = {
+    'hc-viewing': {
+      title: 'Viewing Window',
+      icon: '🌅',
+      liveData() {
+        const e = _cachedActivityScore !== null ? _cachedActivityScore : '–';
+        const vw = getViewingWindow(typeof _cachedCrepuscular === 'number' ? _cachedCrepuscular : 0);
+        // Use solarElevDeg from a best-guess — we cache nothing directly; show label + note
+        return `Status: ${vw.label}\nActivity Score: ${e}/100`;
+      },
+      importance: 'Solar angle dictates how deep light penetrates the water and how visible fish are near the surface. Low-angle dawn and dusk light creates a "magic window" where fish are most active and easiest to spot from above.',
+      interpretation: '🌙 Night → poor visibility. 🌅 Dawn/Dusk (−6° to 2°) → high activity, low light. ⭐ PEAK (2°–15°) → best sighting conditions. ☀️ Good (15°–35°) → fine visibility. 🥵 Midday above 35° → surface glare reduces sighting success.',
+    },
+    'hc-tide': {
+      title: 'Tidal Flow',
+      icon: '🌊',
+      liveData() {
+        const tm = _cachedTidalMomentum !== null ? _cachedTidalMomentum.toFixed(3) : '–';
+        const lbl = getTidalFlowLabel(_cachedTidalMomentum ?? 0);
+        return `Status: ${lbl.label}\nMomentum: ${tm} ft/hr`;
+      },
+      importance: 'Moving water carries baitfish and zooplankton that attract larger fish. Strong tidal flow concentrates prey around structure — bridges, seagrass edges, and channel margins become hot spots during peak current.',
+      interpretation: '💧 Strong Current (≥ 0.3 ft/hr) → fish are feeding actively near structure. 〰️ Moderate Flow (0.1–0.3) → decent activity. 🧲 Slack Water (< 0.1) → tide has stalled; fish disperse and feeding slows.',
+    },
+    'hc-baro': {
+      title: 'Barometric Trend',
+      icon: '📊',
+      liveData() {
+        const pt = _cachedPressureTrend !== null ? _cachedPressureTrend.toFixed(2) : '–';
+        const lbl = getBarometerStatus(_cachedPressureTrend);
+        return `Status: ${lbl.label}\nTrend: ${pt} hPa delta`;
+      },
+      importance: 'Fish swim bladders are sensitive to pressure changes. A falling barometer (approaching front) triggers a short feeding frenzy. A rising barometer after a front passes often suppresses fish activity as they adjust to the new pressure.',
+      interpretation: '📉 Dropping > 0.5 hPa → fish feeding aggressively, head out now. ⚖️ Stable (±0.5 hPa) → normal behavior. 📈 Rising → fish may be inactive; try deeper water or slow presentations.',
+    },
+    'hc-temp': {
+      title: 'Water Temperature',
+      icon: '🌡️',
+      liveData() {
+        const t = _cachedWeather ? (_cachedWeather.main?.temp_water ?? null) : null;
+        // We store waterTempF indirectly; surface the last known value from the global
+        const tStr = typeof _cachedTidalMomentum === 'number' ? '–' : '–'; // placeholder
+        const status = t !== null
+          ? (t >= 74 && t <= 82 ? '🟢 Ideal' : t >= 65 && t <= 88 ? '🟡 Acceptable' : '🔴 Stress')
+          : 'Loading…';
+        return `Status: ${status}\nRange: 74–82°F ideal for Biscayne Bay`;
+      },
+      importance: 'Water temperature directly controls fish metabolism. In Biscayne Bay, the 74–82°F range is optimal for snook, tarpon, and bonefish — they are most active and likely to be in the shallows feeding.',
+      interpretation: '🟢 74–82°F → peak metabolic activity; fish in flats and shallows. 🟡 65–74°F → cooler water slows fish; look near bridges and deeper channels. 🟡 82–88°F → warm but tolerable. 🔴 > 88°F → heat stress; fish retreat to depth.',
+    },
+    'hc-clarity': {
+      title: 'Surface Clarity',
+      icon: '👁',
+      liveData() {
+        const ws = _cachedWeather?.wind?.speed ?? null;
+        const mph = ws !== null ? ws.toFixed(1) : '–';
+        const status = ws === null ? 'Loading…' : ws < 5 ? '🟢 Calm — Excellent' : ws <= 10 ? '🟡 Moderate chop' : '🔴 Choppy — Low clarity';
+        return `Status: ${status}\nWind: ${mph} mph`;
+      },
+      importance: 'Wind-driven surface chop scatters light and reduces the depth at which you can visually spot fish. Calm water in Biscayne Bay lets you sight-fish in as little as 6 inches of water.',
+      interpretation: '🟢 < 5 mph → glassy surface, excellent sight-fishing. 🟡 5–10 mph → light chop; polarized glasses essential. 🔴 > 10 mph → choppy surface; switch to blind-casting techniques near structure.',
+    },
+  };
+
+  function openInfoPopup(cardId) {
+    const cfg = CARDS[cardId];
+    if (!cfg) return;
+
+    // Icon color matches card status dot
+    const dotEl = document.getElementById(`${cardId}-dot`);
+    const statusColor = dotEl?.classList.contains('good') ? 'rgba(0,224,160,0.18)'
+      : dotEl?.classList.contains('fair') ? 'rgba(245,184,0,0.18)'
+      : 'rgba(255,82,82,0.18)';
+
+    popupIcon.textContent  = cfg.icon;
+    popupIcon.style.background = statusColor;
+    popupTitle.textContent = cfg.title;
+    popupLive.textContent  = cfg.liveData();
+    popupImp.textContent   = cfg.importance;
+    popupInter.textContent = cfg.interpretation;
+    overlay.hidden = false;
+    closeBtn.focus();
+  }
+
+  function closeInfoPopup() { overlay.hidden = true; }
+
+  // Wire hero card buttons
+  Object.keys(CARDS).forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener('click', () => openInfoPopup(id));
+  });
+
+  // Close on × button, overlay click, or Escape
+  closeBtn.addEventListener('click', closeInfoPopup);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeInfoPopup(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !overlay.hidden) closeInfoPopup();
+  });
 })();

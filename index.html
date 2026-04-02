@@ -53,96 +53,68 @@
             <p id="last-updated" class="last-updated"></p>
         </section>
 
-        <section class="metrics-grid" aria-label="Current conditions breakdown">
-            <!-- Wind Card -->
-            <article class="metric-card" id="wind-card">
-                <div class="metric-icon">
-                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <path d="M3 8h11a3 3 0 1 0-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                        <path d="M3 12h15a3 3 0 1 1-3 3" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" />
-                        <path d="M3 16h7a2 2 0 1 0-2-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                    </svg>
-                </div>
-                <div class="metric-body">
-                    <h2 class="metric-label">Wind Speed</h2>
-                    <div class="metric-value" id="wind-value">—</div>
-                    <div class="metric-detail" id="wind-detail">fetching…</div>
-                </div>
-                <div class="metric-status-dot" id="wind-status-dot"></div>
-            </article>
+        <section class="hero-cards-grid" aria-label="Current conditions overview">
 
-            <!-- Tide Card -->
-            <article class="metric-card" id="tide-card">
-                <div class="metric-icon">
+            <!-- Viewing Window -->
+            <button class="hero-card" id="hc-viewing" aria-label="Viewing Window details" type="button">
+                <div class="hc-icon" id="hc-viewing-icon">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <path d="M2 17c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 4.5 0 3 2 4.5 0" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" />
-                        <path d="M2 12c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 4.5 0 3 2 4.5 0" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" />
-                        <path d="M12 2v4M8 3.5l2 2M16 3.5l-2 2" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" />
+                        <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/>
+                        <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
                 </div>
-                <div class="metric-body">
-                    <h2 class="metric-label">Tide Window</h2>
-                    <div class="metric-value" id="tide-value">—</div>
-                    <div class="metric-detail" id="tide-detail">fetching…</div>
-                </div>
-                <div class="metric-status-dot" id="tide-status-dot"></div>
-            </article>
+                <span class="hc-name">Viewing Window</span>
+                <span class="hc-status-dot" id="hc-viewing-dot"></span>
+            </button>
 
-            <!-- Rain Card -->
-            <article class="metric-card" id="rain-card">
-                <div class="metric-icon">
+            <!-- Tidal Momentum -->
+            <button class="hero-card" id="hc-tide" aria-label="Tidal Momentum details" type="button">
+                <div class="hc-icon" id="hc-tide-icon">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <path d="M20 16.2A4.5 4.5 0 0 0 17.5 8H16.8A7 7 0 1 0 7 14.9" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                        <path d="M16 14v6M12 16v6M8 14v6" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" />
+                        <path d="M2 17c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 4.5 0 3 2 4.5 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M2 12c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 4.5 0 3 2 4.5 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M12 2v4M8 3.5l2 2M16 3.5l-2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
                 </div>
-                <div class="metric-body">
-                    <h2 class="metric-label">Precipitation</h2>
-                    <div class="metric-value" id="rain-value">—</div>
-                    <div class="metric-detail" id="rain-detail">fetching…</div>
-                </div>
-                <div class="metric-status-dot" id="rain-status-dot"></div>
-            </article>
+                <span class="hc-name">Tidal Flow</span>
+                <span class="hc-status-dot" id="hc-tide-dot"></span>
+            </button>
 
-            <!-- Season Card -->
-            <article class="metric-card" id="season-card">
-                <div class="metric-icon">
+            <!-- Barometric Trend -->
+            <button class="hero-card" id="hc-baro" aria-label="Barometric Trend details" type="button">
+                <div class="hc-icon" id="hc-baro-icon">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" />
-                        <path
-                            d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                        <path d="M12 20V4M5 11l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M5 17h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
                     </svg>
                 </div>
-                <div class="metric-body">
-                    <h2 class="metric-label">Season</h2>
-                    <div class="metric-value" id="season-value">—</div>
-                    <div class="metric-detail" id="season-detail">fetching…</div>
-                </div>
-                <div class="metric-status-dot" id="season-status-dot"></div>
-            </article>
+                <span class="hc-name">Barometer</span>
+                <span class="hc-status-dot" id="hc-baro-dot"></span>
+            </button>
 
-            <!-- Water Temperature Card -->
-            <article class="metric-card" id="temp-card">
-                <div class="metric-icon">
+            <!-- Water Temp -->
+            <button class="hero-card" id="hc-temp" aria-label="Water Temperature details" type="button">
+                <div class="hc-icon" id="hc-temp-icon">
                     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 </div>
-                <div class="metric-body">
-                    <h2 class="metric-label">Water Temp</h2>
-                    <div class="metric-value" id="temp-value">—</div>
-                    <div class="metric-detail" id="temp-detail">fetching…</div>
+                <span class="hc-name">Water Temp</span>
+                <span class="hc-status-dot" id="hc-temp-dot"></span>
+            </button>
+
+            <!-- Surface Clarity -->
+            <button class="hero-card" id="hc-clarity" aria-label="Surface Clarity details" type="button">
+                <div class="hc-icon" id="hc-clarity-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    </svg>
                 </div>
-                <div class="metric-status-dot" id="temp-status-dot"></div>
-            </article>
+                <span class="hc-name">Surface Clarity</span>
+                <span class="hc-status-dot" id="hc-clarity-dot"></span>
+            </button>
+
         </section>
 
         <!-- Tide Timeline -->
@@ -254,6 +226,26 @@
                     <button type="submit" class="btn-submit" id="btn-submit">Submit Sighting</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Info Popup (hero card detail view) -->
+    <div class="info-popup-overlay" id="info-popup-overlay" role="dialog" aria-modal="true" aria-labelledby="popup-title" hidden>
+        <div class="info-popup-card">
+            <div class="info-popup-header">
+                <div class="info-popup-icon" id="popup-icon"></div>
+                <h3 class="info-popup-title" id="popup-title">—</h3>
+                <button class="info-popup-close" id="info-popup-close" type="button" aria-label="Close">✕</button>
+            </div>
+            <div class="info-popup-live" id="popup-live"></div>
+            <div class="info-popup-section">
+                <p class="info-popup-section-label">Why it matters</p>
+                <p class="info-popup-section-body" id="popup-importance"></p>
+            </div>
+            <div class="info-popup-section">
+                <p class="info-popup-section-label">How to read it</p>
+                <p class="info-popup-section-body" id="popup-interpretation"></p>
+            </div>
         </div>
     </div>
 
