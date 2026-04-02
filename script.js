@@ -4,8 +4,9 @@
  * Data sources:
  *   1. OpenWeatherMap "Current Weather" API — wind speed, rain, pressure, clouds
  *   2. OpenWeatherMap "3-Hour Forecast"     — pressure 3 h ahead (pressure_trend)
- *   3. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina) — hi/lo & hourly
- *   4. NOAA CO-OPS Water Temp    — Station 8723214 (Virginia Key),
+ *   3. NOAA CO-OPS Tides API     — Station 8723165 (Miamarina) — hi/lo & hourly predictions
+ *   4. NOAA CO-OPS Water Level   — Station 8723214 (Virginia Key) — real-time observed level
+ *   5. NOAA CO-OPS Water Temp    — Station 8723214 (Virginia Key),
  *                                   fallback: mi0401 (Dodge Island)
  *
  * Condition logic:
@@ -48,7 +49,8 @@ const OPENWEATHER_API_KEY = '__OPENWEATHER_API_KEY__';
 
 const LAT = 25.788996;
 const LON = -80.172930;
-const NOAA_TIDE_STATION = '8723165'; // Miamarina — tides only
+const NOAA_TIDE_STATION = '8723165';         // Miamarina — tide predictions only (no sensor)
+const NOAA_WATER_LEVEL_STATION = '8723214';  // Virginia Key — real-time observed water level
 const NOAA_TEMP_STATIONS = ['8723214', 'mi0401']; // Virginia Key (primary), Dodge Island (fallback)
 
 const WIND_THRESHOLD_MPH = 10;   // < 10 mph = OK
@@ -393,6 +395,8 @@ async function fetchHourlyTides() {
  */
 async function fetchObservedWaterLevel() {
   const date = todayNoaaDate();
+  // ⚠️  Station 8723165 (Miamarina) has NO real-time water level sensor — predictions only.
+  //     Station 8723214 (Virginia Key) is the nearest NOAA station with live level data.
   const url = [
     'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter',
     `?product=water_level`,
@@ -400,7 +404,7 @@ async function fetchObservedWaterLevel() {
     `&begin_date=${date}`,
     `&end_date=${date}`,
     `&datum=MLLW`,
-    `&station=${NOAA_TIDE_STATION}`,
+    `&station=${NOAA_WATER_LEVEL_STATION}`,  // Virginia Key — has live sensor
     `&time_zone=lst_ldt`,
     `&units=english`,
     `&format=json`
