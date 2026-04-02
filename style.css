@@ -340,6 +340,14 @@ main {
   transition: color 0.4s;
 }
 
+/* Smaller font for long interpretive label strings */
+.metric-value.label-mode {
+  font-size: 0.92rem;
+  line-height: 1.45;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+
 .metric-detail {
   font-size: 0.78rem;
   color: var(--text-muted);

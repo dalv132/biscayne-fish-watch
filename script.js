@@ -140,6 +140,43 @@ function fmtDuration(minutes) {
   return `${h}h ${m}m`;
 }
 
+/**
+ * Viewing Window label based on solar elevation.
+ * @param {number} solarElevDeg  Solar elevation in degrees
+ * @returns {{ label: string, status: 'good'|'fair'|'poor' }}
+ */
+function getViewingWindow(solarElevDeg) {
+  if (solarElevDeg < -6)  return { label: '🌙 Night (Poor Visibility)',              status: 'poor' };
+  if (solarElevDeg <  2)  return { label: '🌅 Dawn/Dusk (High Activity, Low Light)', status: 'good' };
+  if (solarElevDeg < 15)  return { label: '⭐ PEAK Sighting Window',                 status: 'good' };
+  if (solarElevDeg < 35)  return { label: '☀️ Good Visibility',                      status: 'fair' };
+  return                         { label: '🥵 Midday Slump (High Glare)',            status: 'fair' };
+}
+
+/**
+ * Tidal flow label based on tidal_momentum (ft/hr).
+ * @param {number} tidalMomentum  Absolute ft/hr slope
+ * @returns {{ label: string, status: 'good'|'fair'|'poor' }}
+ */
+function getTidalFlowLabel(tidalMomentum) {
+  if (tidalMomentum >= 0.3) return { label: '💧 Strong Current', status: 'good' };
+  if (tidalMomentum >= 0.1) return { label: '〰️ Moderate Flow',  status: 'fair' };
+  return                           { label: '🧲 Slack Water',     status: 'poor' };
+}
+
+/**
+ * Barometer status based on pressure_trend (hPa delta: current − 3h forecast).
+ * Positive = falling (front approaching = fish active).
+ * @param {number|null} pressureTrend
+ * @returns {{ label: string, status: 'good'|'fair'|'poor' }}
+ */
+function getBarometerStatus(pressureTrend) {
+  if (pressureTrend === null) return { label: '⚖️ Pressure: No Data',            status: 'fair' };
+  if (pressureTrend > 0.5)   return { label: '📉 Pressure Dropping (Active)',    status: 'good' };
+  if (pressureTrend < -0.5)  return { label: '📈 Pressure Rising (Quiet)',       status: 'poor' };
+  return                            { label: '⚖️ Stable Pressure',               status: 'fair' };
+}
+
 /** Return today's date in NOAA format: YYYYMMDD */
 function todayNoaaDate() {
   const now = new Date();
@@ -1023,13 +1060,12 @@ async function init() {
     console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
     console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────`);
 
-    /* ─── Season ─── */
-    // Season card: informational — always "good" (just a label)
-    seasonValue.textContent = season.isDry ? '☀️ Dry' : '🌧️ Wet';
-    seasonDetail.textContent = season.isDry
-      ? 'Nov–Apr · Clearer water, calmer winds'
-      : 'May–Oct · Rain runoff risk higher';
-    applyStatus(seasonCard, seasonDot, season.isDry ? 'good' : 'fair');
+    /* ─── Season / Viewing Window ─── */
+    const viewingWindow = getViewingWindow(solarElevDeg);
+    seasonValue.textContent = viewingWindow.label;
+    seasonValue.className = 'metric-value label-mode';
+    seasonDetail.textContent = `${season.isDry ? '☀️ Dry Season' : '🌧️ Wet Season'} · Solar ${solarElevDeg.toFixed(1)}°`;
+    applyStatus(seasonCard, seasonDot, viewingWindow.status);
 
     /* ─── Water Temperature ─── */
     let tempOk = true;   // true = within ideal range
@@ -1078,12 +1114,12 @@ async function init() {
     const windDir = weatherData.wind?.deg ?? null;
     const windGust = weatherData.wind?.gust ?? null;
     const windOk = windSpeedMph < WIND_THRESHOLD_MPH;
+    const baroStatus = getBarometerStatus(pressureTrend);
 
-    windValue.textContent = `${windSpeedMph.toFixed(1)} mph`;
-    windDetail.textContent = windDir !== null
-      ? `Direction: ${windDir}°${windGust ? ` · Gusts ${windGust.toFixed(1)} mph` : ''}${pressure ? ` · ${pressure} hPa` : ''}`
-      : `Direction unavailable${pressure ? ` · ${pressure} hPa` : ''}`;
-    applyStatus(windCard, windDot, windOk ? 'good' : 'poor');
+    windValue.textContent = baroStatus.label;
+    windValue.className = 'metric-value label-mode';
+    windDetail.textContent = `${windSpeedMph.toFixed(1)} mph${windOk ? ' ✓' : ' ⚠'}${windDir !== null ? ` · ${windDir}°` : ''}${windGust ? ` · Gusts ${windGust.toFixed(1)} mph` : ''}${pressure ? ` · ${pressure} hPa` : ''}`;
+    applyStatus(windCard, windDot, baroStatus.status);
 
     /* ─── Visibility Score (wind-based + seasonal weights) ─── */
     let visLabel, visClass;
@@ -1137,18 +1173,18 @@ async function init() {
     /* ─── Tides ─── */
     const predictions = tideData.predictions ?? [];
     const { inWindow, nearestHigh, deltaMinutes } = evaluateTideWindow(predictions);
+    const tidalFlowStatus = getTidalFlowLabel(tidalMomentum);
 
-    let tideValText, tideDetText;
+    let tideDetText;
     if (!nearestHigh) {
-      tideValText = 'N/A';
       tideDetText = 'No high tide data today';
     } else {
       const absDelta = Math.abs(deltaMinutes);
       const direction = deltaMinutes > 0 ? 'after' : 'before';
-      tideValText = inWindow ? `-2h/+1h ✓` : `Outside window`;
+      const windowText = inWindow ? 'In window ✓' : 'Outside window';
       tideDetText = absDelta < 1
-        ? `High tide is now (${fmtTime(nearestHigh.date)})`
-        : `${fmtDuration(absDelta)} ${direction} high at ${fmtTime(nearestHigh.date)}`;
+        ? `High tide now · ${windowText}`
+        : `${fmtDuration(absDelta)} ${direction} high · ${windowText}`;
     }
 
     // Append tide trend
@@ -1156,9 +1192,10 @@ async function init() {
       tideDetText += ` · ${tideTrend === 'Rising' ? '↑' : '↓'} ${tideTrend}`;
     }
 
-    tideValue.textContent = tideValText;
+    tideValue.textContent = tidalFlowStatus.label;
+    tideValue.className = 'metric-value label-mode';
     tideDetail.textContent = tideDetText;
-    applyStatus(tideCard, tideDot, inWindow ? 'good' : 'poor');
+    applyStatus(tideCard, tideDot, tidalFlowStatus.status);
 
     renderTideTimeline(predictions, nearestHigh);
 
