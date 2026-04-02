@@ -549,12 +549,17 @@ let _cachedCrepuscular = 0;
 let _cachedCloudCover = null;
 let _cachedSolarElevDeg = 0;  // degrees — used by Viewing Window popup
 
-/* ── Fetch: OWM 3-Hour Forecast (for pressure_trend) ── */
+/* ── Fetch: OWM 3-Hour Forecast (pressure_trend + cloud cover) ── */
 /**
- * Fetches the first entry of the OWM 3-hour forecast to compute
- * pressure_trend = current_pressure − forecast_3h_pressure.
- * A positive result means the barometer is falling (pre-front signal).
- * @returns {Promise<number|null>} Forecast pressure in hPa, or null on failure.
+ * Fetches the first entry of the OWM 3-hour forecast.
+ * Returns both pressure (for pressure_trend) and cloud cover (as a more
+ * reliable cloud reading than the current-weather sensor during rain events).
+ *
+ * pressure_trend = current_pressure − forecastPressure
+ *   Positive result = barometer falling  = fish activity high (pre-front).
+ *   Negative result = barometer rising   = fish activity quiet (post-front).
+ *
+ * @returns {Promise<{forecastPressure: number|null, forecastCloudCover: number|null}>}
  */
 async function fetchOWMForecast() {
   const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${LAT}&lon=${LON}&appid=${OPENWEATHER_API_KEY}&units=imperial&cnt=1`;
@@ -562,15 +567,17 @@ async function fetchOWMForecast() {
     const res = await fetch(url);
     if (!res.ok) {
       console.warn(`[BiscayneFishWatch] OWM Forecast HTTP ${res.status}`);
-      return null;
+      return { forecastPressure: null, forecastCloudCover: null };
     }
     const data = await res.json();
     console.log('[BiscayneFishWatch] OWM Forecast raw data:', data);
-    const forecastPressure = data?.list?.[0]?.main?.pressure ?? null;
-    return forecastPressure;
+    const forecastPressure   = data?.list?.[0]?.main?.pressure    ?? null;
+    const forecastCloudCover = data?.list?.[0]?.clouds?.all       ?? null;
+    console.log(`[BiscayneFishWatch] OWM Forecast — pressure: ${forecastPressure} hPa | cloud cover: ${forecastCloudCover}%`);
+    return { forecastPressure, forecastCloudCover };
   } catch (e) {
     console.warn('[BiscayneFishWatch] fetchOWMForecast failed:', e.message);
-    return null;
+    return { forecastPressure: null, forecastCloudCover: null };
   }
 }
 
@@ -864,17 +871,10 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
     // Pressure (hPa)
     const pressure = weatherData?.main?.pressure ?? null;
 
-    // Rain (last 1–3 h window)
+    // Rain (last 1–3 h window — peak volume of current event)
     const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
     const rain_24h = Math.max(rainMm1h, rainMm3h);
-
-    // Rain-Cloud Guard: if rain > 0 but cloud API reports 0%, force 90%
-    // to avoid logging an "Impossible Row" (rain with clear sky).
-    const rawCloudCover = weatherData?.clouds?.all ?? null;
-    const cloud_cover_guarded = (rain_24h > 0 && (rawCloudCover ?? 0) === 0)
-      ? 90
-      : (rawCloudCover ?? _cachedCloudCover ?? 0);
 
     // Tide
     const predictions = tideData?.predictions ?? [];
@@ -902,7 +902,7 @@ async function sendSighting({ water_clarity, fish_activity, special_sightings })
       tidal_momentum:   _cachedTidalMomentum,    // O
       pressure_trend:   _cachedPressureTrend,    // P
       crepuscular:      _cachedCrepuscular,      // Q
-      cloud_cover:      cloud_cover_guarded,     // R — guarded value (90% if raining with 0% API)
+      cloud_cover:      _cachedCloudCover,       // R — forecast cloud cover (current fallback)
       activity_score:   _cachedActivityScore     // S
     };
 
@@ -970,13 +970,13 @@ async function init() {
   console.log('System Check - Key Status:', OPENWEATHER_API_KEY.startsWith('__') ? 'Placeholder (NOT injected — will 401)' : 'Injected ✅');
 
   try {
-    // Fetch all five data sources in parallel (forecast added for pressure_trend)
+    // Fetch all five data sources in parallel
     const [
       weatherData,
       tideData,
       { tempF: waterTempF, station: tempStation },
       hourlyTidePredictions,
-      forecastPressure
+      { forecastPressure, forecastCloudCover }
     ] = await Promise.all([
       fetchWeather(),
       fetchTides(),
@@ -987,30 +987,28 @@ async function init() {
 
     // ── Compute Environmental Intelligence fields ──────────────────────
     const nowMs = Date.now();
-    const cloudCoverPct = weatherData?.clouds?.all ?? null;   // raw API value
     const currentPressure = weatherData?.main?.pressure ?? null;
 
-    // Rain (EI block — prefixed to avoid collision with rain card block below)
+    // Cloud cover: prefer the 3-hour forecast reading (more reliable during
+    // rain events when the current-weather sensor may be obstructed);
+    // fall back to current weather clouds.all if forecast is unavailable.
+    const cloudCoverPct = forecastCloudCover ?? weatherData?.clouds?.all ?? 0;
+
+    // Rain (EI block)
     const eiRainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const eiRainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain24hMm = eiRainMm1h > 0 ? eiRainMm1h : eiRainMm3h;
+    const rain24hMm  = Math.max(eiRainMm1h, eiRainMm3h);
 
-    // ── Rain-Cloud Guard ──────────────────────────────────────────────
-    // Prevents the "Impossible Row": if rain > 0 but API reports 0% clouds,
-    // force cloud cover to 90% for GHI and Activity Score calculations.
-    const cloudCoverAdjusted = (rain24hMm > 0 && (cloudCoverPct ?? 0) === 0)
-      ? 90
-      : (cloudCoverPct ?? 0);
-    const cloudGuardTriggered = cloudCoverAdjusted !== (cloudCoverPct ?? 0);
-
-    // GHI approximation (uses adjusted cloud cover; returns 0 at night)
+    // GHI approximation (returns 0 at night)
     const solarElevDeg = computeSolarElevation(LAT, LON, nowMs);
-    const ghi = computeGHI(solarElevDeg, cloudCoverAdjusted);
+    const ghi = computeGHI(solarElevDeg, cloudCoverPct);
 
     // Tidal momentum (|ft/hr| slope)
     const tidalMomentum = computeTidalMomentum(hourlyTidePredictions);
 
-    // Pressure trend: current − forecast (positive = falling barometer)
+    // Pressure trend: current − forecast
+    //   Positive = barometer falling  = pre-front signal (Good for activity)
+    //   Negative = barometer rising   = post-front quiet
     const pressureTrend = (currentPressure !== null && forecastPressure !== null)
       ? Math.round((currentPressure - forecastPressure) * 100) / 100
       : null;
@@ -1018,7 +1016,7 @@ async function init() {
     // Crepuscular: 1 if within 60 mins of sunrise/sunset
     const crepuscular = computeCrepuscular(LAT, LON, nowMs, solarElevDeg);
 
-    // Biscayne Activity Score (uses guarded cloud cover)
+    // Biscayne Activity Score
     const activityScore = calculateActivityScore({
       crepuscular,
       tidal_momentum: tidalMomentum,
@@ -1026,7 +1024,7 @@ async function init() {
       wind_speed:     weatherData?.wind?.speed ?? 0,
       water_temp:     waterTempF,
       ghi,
-      cloud_cover:    cloudCoverAdjusted,
+      cloud_cover:    cloudCoverPct,
       moon_phase:     getMoonPhase(),
       rain_24h:       rain24hMm
     });
@@ -1042,7 +1040,7 @@ async function init() {
     _cachedTidalMomentum  = tidalMomentum;
     _cachedPressureTrend  = pressureTrend;
     _cachedCrepuscular    = crepuscular;
-    _cachedCloudCover     = cloudCoverAdjusted;  // store the guarded value
+    _cachedCloudCover     = cloudCoverPct;  // forecast cloud cover (or current fallback)
     _cachedActivityScore  = activityScore;
     _cachedSolarElevDeg   = solarElevDeg;        // store for Viewing Window popup
     _dataReady = true;
@@ -1060,11 +1058,10 @@ async function init() {
     console.log(`[BiscayneFishWatch]   Solar Elevation : ${solarElevDeg.toFixed(2)}°`);
     console.log(`[BiscayneFishWatch]   Rain Volume     : ${rain24hMm.toFixed(2)} mm (max of 1h/3h)`);
     console.log(`[BiscayneFishWatch]   Activity Score  : ${activityScore}/100`);
-    console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────`);
+    console.log(`[BiscayneFishWatch] ─────────────────────────────────────────────────────────`);
 
     // ── 🌞 Solar & Cloud Verification Table ───────────────────────────
-    // High-visibility debug table: verify solar elevation, cloud cover, and GHI
-    // at a glance. Open browser DevTools → Console to see this.
+    // High-visibility debug table. Open DevTools → Console to verify.
     const localTime = new Date(nowMs).toLocaleTimeString('en-US', {
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
       timeZone: 'America/New_York'
@@ -1072,29 +1069,29 @@ async function init() {
     console.log('%c🌞 BiscayneFishWatch — Solar & Cloud Debug', 'font-size:14px;font-weight:bold;color:#ff9900');
     console.table([
       {
-        'Field':                  'Local Time (Miami)',
-        'Value':                  localTime,
-        'Note':                   'America/New_York'
+        'Field': 'Local Time (Miami)',
+        'Value': localTime,
+        'Note':  'America/New_York'
       },
       {
-        'Field':                  'Solar Elevation (°)',
-        'Value':                  solarElevDeg.toFixed(2),
-        'Note':                   solarElevDeg < 0 ? '🌙 Night — GHI forced 0' : solarElevDeg < 15 ? '🌅 Low sun (dawn/dusk)' : '☀️ Daytime'
+        'Field': 'Solar Elevation (°)',
+        'Value': solarElevDeg.toFixed(2),
+        'Note':  solarElevDeg < 0 ? '🌙 Night — GHI forced 0' : solarElevDeg < 15 ? '🌅 Low sun (dawn/dusk)' : '☀️ Daytime'
       },
       {
-        'Field':                  'Cloud Cover API (%)',
-        'Value':                  cloudCoverPct ?? 'null',
-        'Note':                   'Raw OpenWeatherMap value'
+        'Field': 'Cloud Cover — Current API (%)',
+        'Value': weatherData?.clouds?.all ?? 'null',
+        'Note':  'Raw OpenWeatherMap current weather'
       },
       {
-        'Field':                  'Cloud Cover Adjusted (%)',
-        'Value':                  cloudCoverAdjusted,
-        'Note':                   cloudGuardTriggered ? '⚠️ Rain-Cloud Guard TRIGGERED (forced 90%)' : '✅ Matches API'
+        'Field': 'Cloud Cover — Forecast API (%)',
+        'Value': forecastCloudCover ?? 'null',
+        'Note':  forecastCloudCover !== null ? '✅ Used for GHI & Score' : '⚠️ Unavailable — fell back to current'
       },
       {
-        'Field':                  'GHI (W/m²)',
-        'Value':                  ghi,
-        'Note':                   ghi === 0 ? (solarElevDeg <= 0 ? '🌙 Night' : '☁️ Overcast') : `~${ghi} W/m² (max ~1361)`
+        'Field': 'GHI (W/m²)',
+        'Value': ghi,
+        'Note':  ghi === 0 ? (solarElevDeg <= 0 ? '🌙 Night' : '☁️ Overcast') : `~${ghi} W/m² (max ~1361)`
       }
     ]);
 
