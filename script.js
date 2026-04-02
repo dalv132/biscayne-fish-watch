@@ -184,10 +184,16 @@ const tempCard = document.getElementById('temp-card');
 
 const tideTimeline = document.getElementById('tide-timeline');
 
-/* ── Sighting button refs ──────────────────────── */
-const allSightingBtns = document.querySelectorAll('.sighting-btn');
+/* ── Sighting / Modal refs ─────────────────────── */
+const logBtn     = document.getElementById('btn-log-sighting');
+const modalOverlay = document.getElementById('modal-overlay');
+const modalClose = document.getElementById('modal-close');
+const btnCancel  = document.getElementById('btn-cancel');
+const sightingForm = document.getElementById('sighting-form');
+const formError  = document.getElementById('form-error');
+const btnSubmit  = document.getElementById('btn-submit');
 const syncStatus = document.getElementById('sync-status');
-const syncLabel = document.getElementById('sync-label');
+const syncLabel  = document.getElementById('sync-label');
 
 /* ── UI helpers ────────────────────────────────── */
 
@@ -221,26 +227,35 @@ function setSyncState(state, message) {
 }
 
 /**
- * Enable or disable all sighting buttons.
+ * Enable or disable the log sighting button.
  * Also updates the sync pill message when disabling (loading state).
  */
 function setSightingButtonsEnabled(enabled) {
-  allSightingBtns.forEach(btn => {
-    btn.disabled = !enabled;
-    if (!enabled) {
-      btn.style.opacity = '0.45';
-      btn.style.cursor = 'not-allowed';
-    } else {
-      btn.style.opacity = '';
-      btn.style.cursor = '';
-    }
-  });
-
+  if (!logBtn) return;
+  logBtn.disabled = !enabled;
   if (!enabled) {
     setSyncState('syncing', 'Loading Environment Data…');
   } else {
     setSyncState('idle', 'Ready to Log');
   }
+}
+
+/* ── Modal helpers ─────────────────────────────── */
+function openModal() {
+  if (!modalOverlay) return;
+  sightingForm.reset();
+  formError.hidden = true;
+  btnSubmit.disabled = false;
+  btnSubmit.textContent = 'Submit Sighting';
+  logBtn.classList.remove('broadcasting');
+  modalOverlay.hidden = false;
+  // Trap focus inside modal
+  modalOverlay.querySelector('.modal-close')?.focus();
+}
+
+function closeModal() {
+  if (!modalOverlay) return;
+  modalOverlay.hidden = true;
 }
 
 /* ── Fetch: OpenWeatherMap ─────────────────────── */
@@ -789,37 +804,39 @@ function calculateActivityScore({
  * Build and POST a sighting record to the Google Apps Script / Sheet backend.
  * Uses cached live data from the last init() run so no extra fetches are needed.
  *
- * Payload fields — 17 keys (snake_case). timestamp is generated server-side.
- *   token           — DATABASE_TOKEN for server-side verification
- *   label           — sighting label (e.g. 'No Fish', 'Some Fish', 'Lots of Fish')
- *   season          — 'Dry Season' | 'Wet Season'
- *   wind_speed      — mph (number)
- *   wind_deg        — degrees (number | null)
- *   pressure        — hPa from OpenWeatherMap main.pressure (number | null)
- *   tide_level      — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
- *   tide_trend      — 'Rising' | 'Falling' | 'Unknown'
- *   water_temp      — °F (number | null)
- *   rain_24h        — mm rain in last 1–3 h window (number)
- *   moon_phase      — 0.0–1.0 synodic phase
- *   ghi             — W/m² (number)
- *   tidal_momentum  — ft/hr absolute slope (number)
- *   pressure_trend  — hPa delta: current − 3h forecast (positive = falling)
- *   crepuscular     — 0 | 1
- *   cloud_cover     — % (number | null)
- *   activity_score  — Biscayne Activity Score 0–100
+ * Payload fields — 19 keys (snake_case, columns A–S). timestamp generated server-side.
+ *   A  token           — DATABASE_TOKEN
+ *   B  water_clarity   — 'Poor' | 'Fair' | 'Great'
+ *   C  fish_activity   — 'None' | 'Some' | 'Lots'
+ *   D  special_sightings — comma-separated string (e.g. 'Dolphin, Turtle') or ''
+ *   E  season          — 'Dry Season' | 'Wet Season'
+ *   F  wind_speed      — mph
+ *   G  wind_deg        — degrees | null
+ *   H  pressure        — hPa | null
+ *   I  tide_level      — 'IN_WINDOW' | 'OUTSIDE_WINDOW' | 'NO_DATA'
+ *   J  tide_trend      — 'Rising' | 'Falling' | 'Unknown'
+ *   K  water_temp      — °F | null
+ *   L  rain_24h        — mm
+ *   M  moon_phase      — 0.0–1.0
+ *   N  ghi             — W/m²
+ *   O  tidal_momentum  — ft/hr
+ *   P  pressure_trend  — hPa delta (positive = falling)
+ *   Q  crepuscular     — 0 | 1
+ *   R  cloud_cover     — %
+ *   S  activity_score  — 0–100
  *
- * @param {string} label  A short description of the sighting.
- * @returns {Promise<{ok: boolean, result?: any, error?: string}>}
+ * @param {object} userInputs  { water_clarity, fish_activity, special_sightings }
+ * @returns {Promise<{ok: boolean, error?: string}>}
  */
-async function sendSighting(label) {
+async function sendSighting({ water_clarity, fish_activity, special_sightings }) {
   try {
     const weatherData = _cachedWeather;
-    const tideData = _cachedTideData;
-    const waterTempF = _cachedWaterTemp;
+    const tideData    = _cachedTideData;
+    const waterTempF  = _cachedWaterTemp;
 
     // Wind
-    const wind_speed = weatherData?.wind?.speed ?? 0;   // mph (imperial)
-    const wind_deg = weatherData?.wind?.deg ?? null;
+    const wind_speed = weatherData?.wind?.speed ?? 0;
+    const wind_deg   = weatherData?.wind?.deg ?? null;
 
     // Pressure (hPa)
     const pressure = weatherData?.main?.pressure ?? null;
@@ -827,7 +844,7 @@ async function sendSighting(label) {
     // Rain (last 1–3 h window)
     const rainMm1h = weatherData?.rain?.['1h'] ?? 0;
     const rainMm3h = weatherData?.rain?.['3h'] ?? 0;
-    const rain_24h = Math.max(rainMm1h, rainMm3h); // max-volume: capture peak intensity
+    const rain_24h = Math.max(rainMm1h, rainMm3h);
 
     // Tide
     const predictions = tideData?.predictions ?? [];
@@ -836,31 +853,33 @@ async function sendSighting(label) {
       ? 'NO_DATA'
       : inWindow ? 'IN_WINDOW' : 'OUTSIDE_WINDOW';
 
+    // 19-column payload matching Apps Script columns A–S
     const payload = {
-      token:          DATABASE_TOKEN,
-      label:          String(label),
-      season:         _cachedSeason?.name ?? 'Unknown',
-      wind_speed,
-      wind_deg,
-      pressure,
-      tide_level,
-      tide_trend:     _cachedTideTrend,
-      water_temp:     waterTempF,
-      rain_24h,
-      moon_phase:     _cachedMoonPhase,
-      ghi:            _cachedGhi,
-      tidal_momentum: _cachedTidalMomentum,
-      pressure_trend: _cachedPressureTrend,
-      crepuscular:    _cachedCrepuscular,
-      cloud_cover:    _cachedCloudCover,
-      activity_score: _cachedActivityScore
+      token:            DATABASE_TOKEN,          // A
+      water_clarity:    String(water_clarity),   // B
+      fish_activity:    String(fish_activity),   // C
+      special_sightings: String(special_sightings), // D
+      season:           _cachedSeason?.name ?? 'Unknown', // E
+      wind_speed,                                // F
+      wind_deg,                                  // G
+      pressure,                                  // H
+      tide_level,                                // I
+      tide_trend:       _cachedTideTrend,        // J
+      water_temp:       waterTempF,              // K
+      rain_24h,                                  // L
+      moon_phase:       _cachedMoonPhase,        // M
+      ghi:              _cachedGhi,              // N
+      tidal_momentum:   _cachedTidalMomentum,    // O
+      pressure_trend:   _cachedPressureTrend,    // P
+      crepuscular:      _cachedCrepuscular,      // Q
+      cloud_cover:      _cachedCloudCover,       // R
+      activity_score:   _cachedActivityScore     // S
     };
 
-    console.log('[Biscayne-Watch] Data Packet Sent:', payload);
+    console.log('[Biscayne-Watch] Data Packet Sent (19 cols):', payload);
 
     // Google Apps Script (no-cors): body must be plain JSON string sent as text/plain
-    // to avoid a CORS preflight. The response is opaque — we cannot read status or
-    // body, so a non-throwing fetch is treated as a successful dispatch.
+    // to avoid a CORS preflight. The response is opaque — non-throwing = success.
     await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       mode: 'no-cors',
@@ -868,7 +887,7 @@ async function sendSighting(label) {
       body: JSON.stringify(payload)
     });
 
-    console.log('[Biscayne-Watch] Dispatch complete (opaque no-cors response — no status available).');
+    console.log('[Biscayne-Watch] Dispatch complete (opaque no-cors — no status available).');
     return { ok: true };
 
   } catch (err) {
@@ -1194,7 +1213,7 @@ async function init() {
 
     renderCondition(rating, subtitle);
 
-    // All data loaded — enable sighting buttons
+    // All data loaded — enable log button
     setSightingButtonsEnabled(true);
 
     // Fetch initial log count for the progress footer
@@ -1216,62 +1235,76 @@ async function init() {
     if (seasonDetail) seasonDetail.textContent = err.message;
     tideTimeline.innerHTML = `<p class="error-msg">${err.message}</p>`;
 
-    // On error, update pill to indicate failure (keep buttons disabled)
+    // On error, update pill to indicate failure (keep log button disabled)
     setSyncState('idle', 'Data load failed');
-    allSightingBtns.forEach(btn => {
-      btn.disabled = true;
-      btn.style.opacity = '0.45';
-      btn.style.cursor = 'not-allowed';
-    });
+    if (logBtn) { logBtn.disabled = true; }
   }
 }
 
 // Kick off on page load
 init();
 
-/* ── Live Report: sighting button logic ─────────────── */
-(function initSightingButtons() {
-  const LOCK_MS = 5000; // 5 s lock to prevent duplicate entries
+/* ── Live Report: modal + sighting logic ────────────── */
+(function initSightingModal() {
+  // Open modal on main button click
+  if (logBtn) {
+    logBtn.addEventListener('click', openModal);
+  }
 
-  allSightingBtns.forEach(btn => {
-    // Store original inner HTML to restore after success
-    btn.addEventListener('click', async () => {
-      const value = parseInt(btn.dataset.value, 10);
-      const labels = { 0: 'No Fish', 1: 'Some Fish', 2: 'Lots of Fish' };
-      const label = labels[value] ?? String(value);
+  // Close modal via the × button or Cancel
+  [modalClose, btnCancel].forEach(el => {
+    if (el) el.addEventListener('click', closeModal);
+  });
 
-      // Disable all buttons for LOCK_MS to prevent duplicate entries
-      allSightingBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.45'; b.style.cursor = 'not-allowed'; });
+  // Close when clicking the dim overlay (outside the card)
+  if (modalOverlay) {
+    modalOverlay.addEventListener('click', (e) => {
+      if (e.target === modalOverlay) closeModal();
+    });
+  }
 
-      // UI feedback: show "Syncing..." on the clicked button
-      const originalHTML = btn.innerHTML;
-      btn.innerHTML = `<span class="sighting-emoji">⏳</span><span class="sighting-label">Syncing…</span>`;
+  // Close on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalOverlay && !modalOverlay.hidden) closeModal();
+  });
+
+  // Form submit
+  if (sightingForm) {
+    sightingForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      // Collect form values
+      const data = new FormData(sightingForm);
+      const water_clarity   = data.get('water_clarity') ?? '';
+      const fish_activity   = data.get('fish_activity') ?? '';
+      const special_sightings = data.getAll('special_sightings').join(', ');
+
+      // Validation: both required fields must be selected
+      if (!water_clarity || !fish_activity) {
+        formError.hidden = false;
+        return;
+      }
+      formError.hidden = true;
+
+      // Broadcasting state
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Broadcasting…';
+      logBtn.classList.add('broadcasting');
       setSyncState('syncing', 'Broadcasting sighting…');
 
-      // Fire-and-forget — no-cors hides the server response so we treat
-      // any non-throwing dispatch as success.
-      await sendSighting(label);
+      // Send to backend
+      await sendSighting({ water_clarity, fish_activity, special_sightings });
 
-      // UI feedback: show "Success!" on the clicked button
-      btn.innerHTML = `<span class="sighting-emoji">✅</span><span class="sighting-label">Success!</span>`;
-
-      // Refresh progress count after a successful sighting
-      updateProgressCount();
-
-      // Green pulse: add class to the clicked button for 2 s
-      btn.classList.add('btn-broadcast');
-      setTimeout(() => btn.classList.remove('btn-broadcast'), 2000);
-
-      // Sync pill: show success message
+      // Success! Close modal and show toast
+      closeModal();
+      logBtn.classList.remove('broadcasting');
       setSyncState('success', 'Sighting Broadcasted to Cloud.');
 
-      // After LOCK_MS re-enable buttons and reset pill
-      setTimeout(() => {
-        // Restore original HTML
-        btn.innerHTML = originalHTML;
-        allSightingBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; b.style.cursor = ''; });
-        setSyncState('idle', 'Ready to Log');
-      }, LOCK_MS);
+      // Refresh progress count
+      updateProgressCount();
+
+      // Reset pill after 4 s
+      setTimeout(() => setSyncState('idle', 'Ready to Log'), 4000);
     });
-  });
+  }
 })();

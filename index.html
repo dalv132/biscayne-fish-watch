@@ -162,22 +162,11 @@
                     <span class="sync-label" id="sync-label">Loading Environment Data…</span>
                 </div>
             </div>
-            <p class="live-report-sub">Tap to log current fish activity — conditions are recorded automatically.</p>
-            <div class="sighting-buttons" role="group" aria-label="Fish activity level">
-                <button class="sighting-btn btn-no-fish" id="btn-no-fish" data-value="0" type="button" disabled>
-                    <span class="sighting-emoji">🚫</span>
-                    <span class="sighting-label">No Fish</span>
-                    <span class="sighting-value">0</span>
-                </button>
-                <button class="sighting-btn btn-some-fish" id="btn-some-fish" data-value="1" type="button" disabled>
-                    <span class="sighting-emoji">🐟</span>
-                    <span class="sighting-label">Some Fish</span>
-                    <span class="sighting-value">1</span>
-                </button>
-                <button class="sighting-btn btn-lots-fish" id="btn-lots-fish" data-value="2" type="button" disabled>
-                    <span class="sighting-emoji">🦈</span>
-                    <span class="sighting-label">Lots of Fish</span>
-                    <span class="sighting-value">2</span>
+            <p class="live-report-sub">Tap to log your sighting — water clarity, fish activity &amp; any special wildlife are recorded with current conditions.</p>
+            <div class="log-btn-wrap">
+                <button class="log-sighting-btn" id="btn-log-sighting" type="button" disabled>
+                    <span class="log-btn-icon">🎣</span>
+                    <span class="log-btn-label">Log Sighting &amp; Conditions</span>
                 </button>
             </div>
         </section>
@@ -197,6 +186,76 @@
             <p class="progress-count" id="progress-count">Logs Collected: — / 100</p>
         </div>
     </main>
+
+    <!-- Sighting Modal -->
+    <div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal-title">🎣 Log Sighting &amp; Conditions</h3>
+                <button class="modal-close" id="modal-close" type="button" aria-label="Close">✕</button>
+            </div>
+
+            <form id="sighting-form" novalidate>
+
+                <!-- Water Clarity -->
+                <fieldset class="form-group">
+                    <legend class="form-legend">Water Clarity <span class="required">*</span></legend>
+                    <div class="radio-group">
+                        <label class="radio-pill">
+                            <input type="radio" name="water_clarity" value="Poor" required />
+                            <span>🌊 Poor</span>
+                        </label>
+                        <label class="radio-pill">
+                            <input type="radio" name="water_clarity" value="Fair" />
+                            <span>💧 Fair</span>
+                        </label>
+                        <label class="radio-pill">
+                            <input type="radio" name="water_clarity" value="Great" />
+                            <span>✨ Great</span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <!-- Fish Activity -->
+                <fieldset class="form-group">
+                    <legend class="form-legend">Fish Activity <span class="required">*</span></legend>
+                    <div class="radio-group">
+                        <label class="radio-pill">
+                            <input type="radio" name="fish_activity" value="None" required />
+                            <span>🚫 None</span>
+                        </label>
+                        <label class="radio-pill">
+                            <input type="radio" name="fish_activity" value="Some" />
+                            <span>🐟 Some</span>
+                        </label>
+                        <label class="radio-pill">
+                            <input type="radio" name="fish_activity" value="Lots" />
+                            <span>🦈 Lots</span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <!-- Special Sightings -->
+                <fieldset class="form-group">
+                    <legend class="form-legend">Special Sightings <span class="optional">(select all that apply)</span></legend>
+                    <div class="checkbox-group">
+                        <label class="checkbox-pill"><input type="checkbox" name="special_sightings" value="Dolphin" /><span>🐬 Dolphin</span></label>
+                        <label class="checkbox-pill"><input type="checkbox" name="special_sightings" value="Manatee" /><span>🐄 Manatee</span></label>
+                        <label class="checkbox-pill"><input type="checkbox" name="special_sightings" value="Turtle" /><span>🐢 Turtle</span></label>
+                        <label class="checkbox-pill"><input type="checkbox" name="special_sightings" value="Shark" /><span>🦈 Shark</span></label>
+                        <label class="checkbox-pill"><input type="checkbox" name="special_sightings" value="Stingray" /><span>🌊 Stingray</span></label>
+                    </div>
+                </fieldset>
+
+                <p class="form-error" id="form-error" hidden>Please select Water Clarity and Fish Activity before submitting.</p>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel" id="btn-cancel">Cancel</button>
+                    <button type="submit" class="btn-submit" id="btn-submit">Submit Sighting</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <script src="script.js"></script>
 </body>
