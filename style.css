@@ -222,39 +222,68 @@ main {
   letter-spacing: 0.03em;
 }
 
-/* ── Visibility Score pill ───────────────────── */
-.visibility-score {
-  display: inline-flex;
+/* ── Metrics Row (hero section) ──────────────── */
+.metrics-row {
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 0.3rem 1rem;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  transition: background 0.4s, color 0.4s, border-color 0.4s;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
-.visibility-score.vis-excellent {
-  color: var(--good);
+.metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 191, 165, 0.22);
+  background: rgba(0, 191, 165, 0.07);
+  backdrop-filter: blur(4px);
+  transition: border-color 0.35s, background 0.35s;
+}
+
+.metric-pill-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.metric-pill-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.metric-pill-val {
+  font-size: 0.88rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--teal);
+  min-width: 2.2ch;
+  text-align: right;
+}
+
+/* Color variants set by JS */
+.metric-pill.good {
   border-color: rgba(0, 224, 160, 0.4);
   background: rgba(0, 224, 160, 0.1);
 }
+.metric-pill.good .metric-pill-val { color: var(--good); }
 
-.visibility-score.vis-good {
-  color: var(--fair);
+.metric-pill.fair {
   border-color: rgba(245, 184, 0, 0.35);
   background: rgba(245, 184, 0, 0.08);
 }
+.metric-pill.fair .metric-pill-val { color: var(--fair); }
 
-.visibility-score.vis-low {
-  color: var(--poor);
+.metric-pill.poor {
   border-color: rgba(255, 82, 82, 0.35);
   background: rgba(255, 82, 82, 0.08);
 }
+.metric-pill.poor .metric-pill-val { color: var(--poor); }
 
 
 /* \u2500\u2500 Hero Cards Grid \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */

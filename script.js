@@ -202,11 +202,13 @@ function todayNoaaDate() {
 }
 
 /* ── DOM refs ──────────────────────────────────── */
-const condBadge = document.getElementById('condition-badge');
-const condText = document.getElementById('condition-text');
-const condSub = document.getElementById('condition-subtitle');
-const lastUpdated = document.getElementById('last-updated');
-const visibilityEl = document.getElementById('visibility-score');
+const condBadge     = document.getElementById('condition-badge');
+const condText      = document.getElementById('condition-text');
+const lastUpdated   = document.getElementById('last-updated');
+const visibilityVal = document.getElementById('visibility-val');  // viewing 0–100
+const activityVal   = document.getElementById('activity-val');    // activity score 0–100
+const pillViewing   = document.getElementById('pill-viewing');
+const pillActivity  = document.getElementById('pill-activity');
 
 /* ── Hero card DOM refs ───────────────────────── */
 const hcViewingIcon = document.getElementById('hc-viewing-icon');
@@ -247,12 +249,39 @@ function applyHeroStatus(icon, dot, status) {
   dot.classList.add(status);
 }
 
-/** Render the overall condition badge */
-function renderCondition(rating, metricsText) {
+/**
+ * Render the overall condition badge and update the two metric pills.
+ * @param {string} rating          'OPTIMAL' | 'FAIR' | 'POOR'
+ * @param {number} activityScore   0–100 weighted environmental score
+ * @param {number} viewingPotential 0–100 solar elevation curve score
+ */
+function renderCondition(rating, activityScore, viewingPotential) {
+  // Master badge
   condBadge.classList.remove('loading', 'optimal', 'fair', 'poor');
-  condBadge.classList.add(rating.toLowerCase().split(' ')[0]); // handle "fair" from override text
+  condBadge.classList.add(rating.toLowerCase());
   condText.textContent = rating;
-  condSub.textContent = metricsText;
+
+  // Viewing Potential pill
+  if (visibilityVal) visibilityVal.textContent = viewingPotential;
+  if (pillViewing) {
+    pillViewing.classList.remove('good', 'fair', 'poor');
+    const vpClass = viewingPotential >= 70 ? 'good'
+      : viewingPotential >= 40 ? 'fair'
+      : 'poor';
+    pillViewing.classList.add(vpClass);
+  }
+
+  // Activity Score pill
+  if (activityVal) activityVal.textContent = activityScore;
+  if (pillActivity) {
+    pillActivity.classList.remove('good', 'fair', 'poor');
+    const asClass = activityScore >= 60 ? 'good'
+      : activityScore >= 35 ? 'fair'
+      : 'poor';
+    pillActivity.classList.add(asClass);
+  }
+
+  // Timestamp
   lastUpdated.textContent = `Last updated: ${fmtTime(new Date())}`;
 }
 
@@ -1318,7 +1347,7 @@ async function init() {
     const clarityStatus = windSpeedMph < 5 ? 'good' : windSpeedMph <= 10 ? 'fair' : 'poor';
     if (hcClarityIcon && hcClarityDot) applyHeroStatus(hcClarityIcon, hcClarityDot, clarityStatus);
 
-    /* internal wind sub-vars used by visibilityEl and overall score */
+    /* internal wind sub-vars — feed overall condition score */
     const windDir  = weatherData.wind?.deg ?? null;
     const windGust = weatherData.wind?.gust ?? null;
     const windOk   = windSpeedMph < WIND_THRESHOLD_MPH;
@@ -1349,19 +1378,7 @@ async function init() {
       if (rainIn3h > WET_SEASON_RAIN_PENALTY_IN) { wetSeasonPenalty = true; rainOk = false; }
     }
 
-    /* ─── Visibility score (still drives the visibilityEl banner) ─── */
-    let visLabel, visClass;
-    if (windSpeedMph < VIS_EXCELLENT_MPH) {
-      visLabel = '👁 Visibility: Excellent'; visClass = 'vis-excellent';
-    } else if (windSpeedMph <= VIS_GOOD_MPH) {
-      visLabel = '👁 Visibility: Good'; visClass = 'vis-good';
-    } else {
-      visLabel = '👁 Visibility: Low'; visClass = 'vis-low';
-    }
-    if (season.isDry) visLabel += ' (+Dry Season clarity)';
-    visLabel += `  ·  ${getMoonPhaseLabel(moonPhase)}`;
-    visibilityEl.textContent = visLabel;
-    visibilityEl.className = `visibility-score ${visClass}`;
+
 
     /* ─── Tides (internal variables for overall score) ─── */
     const predictions = tideData.predictions ?? [];
@@ -1418,7 +1435,7 @@ async function init() {
       subtitle = 'Conditions are unfavorable. Consider waiting for better conditions.';
     }
 
-    renderCondition(rating, subtitle);
+    renderCondition(rating, activityScore, viewingPotential);
 
     // All data loaded — enable log button
     setSightingButtonsEnabled(true);
@@ -1432,7 +1449,7 @@ async function init() {
     condBadge.classList.remove('loading');
     condBadge.classList.add('poor');
     condText.textContent = 'Error';
-    condSub.textContent = `Could not load data: ${err.message}`;
+    lastUpdated.textContent = `Could not load data: ${err.message}`;
 
     [windValue, tideValue, rainValue, tempValue].forEach(el => {
       el.textContent = 'Error'; el.style.color = 'var(--poor)';

@@ -48,8 +48,18 @@
             <div id="condition-badge" class="condition-badge loading" role="status" aria-live="polite">
                 <span id="condition-text">Loading…</span>
             </div>
-            <div id="visibility-score" class="visibility-score" aria-live="polite"></div>
-            <p id="condition-subtitle" class="condition-subtitle"></p>
+            <div id="metrics-row" class="metrics-row" aria-label="Key metrics">
+                <div class="metric-pill" id="pill-viewing">
+                    <span class="metric-pill-icon" aria-hidden="true">👁️</span>
+                    <span class="metric-pill-label">Viewing</span>
+                    <span class="metric-pill-val" id="visibility-val">—</span>
+                </div>
+                <div class="metric-pill" id="pill-activity">
+                    <span class="metric-pill-icon" aria-hidden="true">🐟</span>
+                    <span class="metric-pill-label">Activity</span>
+                    <span class="metric-pill-val" id="activity-val">—</span>
+                </div>
+            </div>
             <p id="last-updated" class="last-updated"></p>
         </section>
 
